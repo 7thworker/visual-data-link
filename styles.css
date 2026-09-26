@@ -34,6 +34,11 @@ button, input, select, textarea {
   padding: 0.35rem 0.6rem;
 }
 button { cursor: pointer; }
+/* Taps never zoom the page (double-tap zoom); a pressed button shows it. */
+html { touch-action: manipulation; -webkit-text-size-adjust: 100%; }
+button:active:not(:disabled) { filter: brightness(1.35); transform: scale(0.97); }
+button.done { border-color: #3fbf6f; background: #1f3a2a; }
+button.failed { border-color: var(--error); background: #3a1f22; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button:disabled, input:disabled, select:disabled { opacity: 0.5; cursor: default; }
 a.button-link {
@@ -187,6 +192,27 @@ body.receiver, body.index {
 .receiver .buttons button, .receiver .buttons select { padding: 0.3rem 0.5rem; }
 .receiver header h1 { margin-bottom: 0.4rem; }
 .m1 .stats { margin-top: 0.6rem; }
+/* Sender presets: one button per test setting. */
+.presets h2 { margin-top: 0.5rem; }
+.presets .buttons { display: flex; flex-direction: column; align-items: stretch; gap: 0.35rem; }
+.presets button { text-align: left; padding: 0.4rem 0.6rem; }
+.presets h3 { margin: 0.6rem 0 0.1rem; font-size: 0.9rem; opacity: 0.8; }
+.presets .preset-label { display: block; font-weight: 600; }
+.presets .preset-detail { display: block; font-size: 0.8rem; opacity: 0.75; margin-top: 0.1rem; }
+
+/* iOS Safari zooms into form fields under 16 px when they get focus. */
+.receiver select, .receiver input, .receiver textarea { font-size: 16px; }
+/* Experimental receiver: camera view near the top; status and progress below
+   it with fixed space, so that text changes never move the view. */
+.receiver .main-actions { margin: 0.3rem 0 0.5rem; }
+.receiver .live .status { height: 4.2em; line-height: 1.4; overflow-y: auto; margin: 0.3rem 0 0.2rem; font-size: 0.9rem; }
+.receiver .live .progress { margin: 0.2rem 0 0.4rem; }
+.receiver .live .progress[hidden] { display: block; visibility: hidden; }
+.receiver .live .progress-text { height: 1.9rem; align-items: center; }
+.receiver .live .progress-text span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.receiver details.panel { margin: 0.4rem 0; padding: 0.3rem 0.6rem; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.receiver details.panel summary { color: var(--fg); padding: 0.2rem 0; }
+.receiver details.panel .form { margin-top: 0.4rem; }
 details { margin: 1rem 0; }
 details summary { cursor: pointer; color: var(--muted); }
 
@@ -224,7 +250,13 @@ button.big, a.button-link.big { font-size: 1.15rem; padding: 0.7rem 1.2rem; }
 .app-sending[hidden] { display: none; }
 .send-bar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.4rem 0.8rem; background: var(--panel); border-bottom: 1px solid var(--border); }
 .send-bar .buttons { margin: 0; }
-.app-sending .stage { flex: 1; }
+.app-sending .stage { flex: 1; min-height: 0; }
+/* Receive page QR on the send page: below the start button, and while
+   sending in a strip above the pattern (the stage shrinks, never covered). */
+.send-qr { margin: 1rem 0; }
+.send-qr-bar { display: flex; align-items: center; gap: 1rem; padding: 0.4rem 0.8rem; background: var(--panel); border-bottom: 1px solid var(--border); }
+.send-qr-bar[hidden] { display: none; }
+.send-qr-bar .qr { width: 9rem; height: 9rem; margin: 0; }
 
 .top-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; margin: 1rem 0; }
 .top-choice { padding: 1rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }

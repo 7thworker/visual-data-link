@@ -16,3 +16,13 @@ export function linearMeanGray(levels) {
   for (let v = 1; v < 256; v++) if (Math.abs(relativeLuminance(v) - target) < Math.abs(relativeLuminance(best) - target)) best = v;
   return best;
 }
+
+// The same for colours ([r, g, b] sRGB, e.g. the 8-colour palette of
+// color.js): the gray matching their mean relative luminance.
+export function linearMeanGrayRgb(colours) {
+  const lum = ([r, g, b]) => 0.2126 * relativeLuminance(r) + 0.7152 * relativeLuminance(g) + 0.0722 * relativeLuminance(b);
+  const target = colours.reduce((a, c) => a + lum(c), 0) / colours.length;
+  let best = 0;
+  for (let v = 1; v < 256; v++) if (Math.abs(relativeLuminance(v) - target) < Math.abs(relativeLuminance(best) - target)) best = v;
+  return best;
+}

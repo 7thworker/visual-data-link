@@ -23,6 +23,13 @@
     <p class="hint">選んだファイルはこの PC の外へは送られません。画面に模様として表示するだけです。画面が見える人は誰でも受け取れるので、人に見られて困るファイルは送らないでください。<span class="en" lang="en">The file does not leave this PC: it is only shown on the screen as a pattern. Anyone who can see the screen can receive it, so do not send files that others must not see.</span></p>
 
     <div class="form app-options">
+      <label>送り方 / Mode
+        <select id="mode" autocomplete="off">
+          <option value="standard" selected>標準（縦持ちでも横持ちでも受け取れる、おすすめ）/ Standard (phone upright or sideways, recommended)</option>
+          <option value="fast">速い（新しいスマホ向け。古いスマホは横持ちで）/ Fast (newer phones; hold older ones sideways)</option>
+          <option value="compat">互換（グレー、以前の形式）/ Compatible (gray, the earlier format)</option>
+        </select>
+      </label>
       <label>表示の大きさ / Pattern size
         <select id="size" autocomplete="off">
           <option value="6" selected>小さめ（スマホを縦持ちで近づけやすい、おすすめ）/ Small (easy to frame with a phone held upright, recommended)</option>
@@ -30,20 +37,27 @@
           <option value="0">画面いっぱい / Full window</option>
         </select>
       </label>
+      <p class="hint">送り方「標準」「速い」では、光の点滅を抑えるため「小さめ」に固定されます。<span class="en" lang="en">With "Standard" and "Fast" the size stays "Small" to limit flashing.</span></p>
     </div>
 
     <div class="buttons">
       <button id="start" type="button" class="primary big" disabled>送信開始 / Start sending</button>
     </div>
 
+    <div class="send-qr" id="setup-qr" hidden>
+      <p>受け取るスマホのカメラでこの QR コードを読み取ると、受信ページが開きます。<span class="en" lang="en">Scan this QR code with the receiving phone's camera to open the receive page.</span></p>
+      <canvas id="setup-qr-canvas" class="qr"></canvas>
+      <p id="setup-qr-url" class="hint qr-url"></p>
+    </div>
+
     <details class="app-help">
       <summary>受け取り方 / How to receive</summary>
       <ol>
-        <li>スマホで受信ページを開きます（トップページの QR コードから開けます）。<span class="en" lang="en">Open the receive page on the phone (scan the QR code on the top page).</span></li>
+        <li>スマホで受信ページを開きます（このページの QR コードから開けます。送信中は「受信用 QR」で表示）。<span class="en" lang="en">Open the receive page on the phone (scan the QR code on this page; while sending, press "Receive QR").</span></li>
         <li>「カメラを起動」を押し、この画面の白い枠がすべて映るように向けます。枠が緑になると受信が始まります。<span class="en" lang="en">Tap "Start camera" and point it so that the whole white frame on this screen is visible. Reception starts when the frame turns green.</span></li>
         <li>受け取りが終わったら、スマホで「保存」を押します。送信側は「停止」を押してください。<span class="en" lang="en">When it is done, tap "Save" on the phone and press "Stop" here.</span></li>
       </ol>
-      <p class="hint">目安: 1 MiB あたり 25〜30 秒。受信側がいつ始めても、途中で画面から外れても受け取れます。<span class="en" lang="en">About 25–30 seconds per MiB. The phone can start at any time and may look away in between.</span></p>
+      <p class="hint">目安: 1 MiB あたり、標準で 12〜25 秒、速いで 9〜17 秒、互換で 25〜30 秒（スマホによって変わります）。受信側がいつ始めても、途中で画面から外れても受け取れます。<span class="en" lang="en">About 12–25 s per MiB (Standard), 9–17 s (Fast) or 25–30 s (Compatible), depending on the phone. The phone can start at any time and may look away in between.</span></p>
     </details>
   </section>
 
@@ -51,9 +65,15 @@
     <div class="send-bar">
       <span id="send-info"></span>
       <span class="buttons">
+        <button id="qr-toggle" type="button" hidden>受信用 QR / Receive QR</button>
         <button id="fullscreen" type="button">全画面 / Full screen</button>
         <button id="stop" type="button" class="primary">停止 / Stop</button>
       </span>
+    </div>
+    <!-- Above the pattern, never over it (the receiver needs the whole frame). -->
+    <div class="send-qr-bar" id="sending-qr" hidden>
+      <canvas id="sending-qr-canvas" class="qr"></canvas>
+      <span>受け取るスマホのカメラで読み取ると、受信ページが開きます。<span class="en" lang="en">Scan with the receiving phone to open the receive page.</span></span>
     </div>
     <main id="stage" class="stage">
       <canvas id="screen"></canvas>
@@ -66,7 +86,7 @@
       <div id="warning-body">
         <p>送信中は、画面の模様が毎秒 <strong class="warning-rate">20</strong> 回程度切り替わります。<span class="en" lang="en">While sending, the pattern on the screen changes about <strong class="warning-rate">20</strong> times per second.</span></p>
         <p>光の点滅や模様で発作・気分不良を起こしたことがある方は使用しないでください。また周囲の人にも画面を注視しないよう伝えてください。気分が悪くなった場合はすぐに Esc キーで停止してください。<span class="en" lang="en">Do not use it if flashing lights or patterns have ever caused you a seizure or discomfort, and ask people nearby not to stare at the screen. If you feel unwell, press Esc at once to stop.</span></p>
-        <p><strong>画面から、送信画面の横幅以上離れて見てください。</strong>近くから見ると細かい模様の明るさの揺れが大きくなります。<span class="en" lang="en"><strong>Watch from at least the width of the sending pattern away.</strong> Up close, the brightness of the fine pattern fluctuates more.</span></p>
+        <p><strong>画面から、送信画面の横幅の 2 倍以上離れて見てください。</strong>近くから見ると細かい模様の明るさや赤色の揺れが大きくなります。<span class="en" lang="en"><strong>Watch from at least twice the width of the sending pattern away.</strong> Up close, the brightness and the red of the fine pattern fluctuate more.</span></p>
         <p>WCAG 2.3.1 の点滅の基準に対してはシミュレーションで確認しただけで、専門の解析ツールによる評価は受けていません。<span class="en" lang="en">The flashing was checked against WCAG 2.3.1 by simulation only, not with a certified analysis tool.</span></p>
       </div>
       <div class="buttons">

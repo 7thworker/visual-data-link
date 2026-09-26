@@ -36,22 +36,51 @@ const DECODABLE_SER = 0.03;
 
 const yieldToLoop = () => new Promise((r) => setTimeout(r, 0));
 
-function toBase64(bytes) {
+export function toBase64(bytes) {
   let bin = '';
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(bin);
 }
 
-// Symbols (0..3) packed four per byte, first symbol in the high bits.
-function packSymbols(symbols) {
-  const out = new Uint8Array(Math.ceil(symbols.length / 4));
-  for (let i = 0; i < symbols.length; i++) out[i >> 2] |= (symbols[i] & 3) << (6 - 2 * (i & 3));
+// Symbols packed `bits` (2: four per byte, 4: two per byte) per symbol,
+// first symbol in the high bits. 2 bits hold 4-level profiles only; 8-level
+// (colour) frames need 4.
+export function packSymbols(symbols, bits = 2) {
+  const per = 8 / bits;
+  const mask = (1 << bits) - 1;
+  const out = new Uint8Array(Math.ceil(symbols.length / per));
+  for (let i = 0; i < symbols.length; i++) out[Math.floor(i / per)] |= (symbols[i] & mask) << (8 - bits * ((i % per) + 1));
   return out;
 }
+
+// Bits per packed symbol for a profile.
+export const packBits = (profile) => (profile.levels > 16 ? 8 : profile.levels > 4 ? 4 : 2);
 
 // Raw values of a failed record back to luma (NaN = not read).
 export function recordValues(u16) {
   return Float32Array.from(u16, (v) => (v === 0xffff ? NaN : v / 16));
+}
+
+// Full frame symbols of a MANIFEST / DATA frame of a verified session, as the
+// sender built them: returns rec => Uint8Array(cells), rec carrying the header
+// fields (frameType, sourceBlock, sequence, flags).
+export function frameRegenerator(profile, session) {
+  const m = session.manifest;
+  const transfers = new Map(); // FEC rate -> prepared transfer
+  return (rec) => {
+    const fec = fecRateFromFlags(rec.flags);
+    let tx = transfers.get(fec);
+    if (!tx) {
+      tx = prepareTransfer({ profile, fec, sessionId: session.sessionId, bytes: session.data, sha256: m.sha256, name: m.name, mime: m.mime, manifestEvery: 1, outerCode: m.outerCode });
+      transfers.set(fec, tx);
+    }
+    const entry =
+      rec.frameType === FRAME_TYPE.MANIFEST
+        ? null
+        : { sourceBlock: rec.sourceBlock, sequence: rec.sequence, repair: m.outerCode === 1 && rec.sequence >= tx.plan.blocks[rec.sourceBlock].count };
+    const body = entry ? dataBody(tx, entry) : tx.manifestBody;
+    return buildObjectFrame({ profile, sessionId: session.sessionId, sequence: rec.sequence, frameType: rec.frameType, sourceBlock: rec.sourceBlock, body, fec });
+  };
 }
 
 // failed: ObjectReceiver.failed records; session: the verified session;
@@ -66,22 +95,7 @@ export async function analyzeFailedCaptures(profile, session, failed, { rawSampl
   const rowOf = index.map((i) => Math.min(ROW_BANDS - 1, Math.floor((Math.floor(i / w) * ROW_BANDS) / h)));
   const colOf = index.map((i) => Math.min(COL_BANDS - 1, Math.floor(((i % w) * COL_BANDS) / w)));
   const blockOf = combineBlockOf(profile, index);
-  const transfers = new Map(); // FEC rate -> prepared transfer (regenerates frames)
-  // Full frame symbols of a frame (header fields), as the sender built it.
-  const frameOf = (rec) => {
-    const fec = fecRateFromFlags(rec.flags);
-    let tx = transfers.get(fec);
-    if (!tx) {
-      tx = prepareTransfer({ profile, fec, sessionId: session.sessionId, bytes: session.data, sha256: m.sha256, name: m.name, mime: m.mime, manifestEvery: 1, outerCode: m.outerCode });
-      transfers.set(fec, tx);
-    }
-    const entry =
-      rec.frameType === FRAME_TYPE.MANIFEST
-        ? null
-        : { sourceBlock: rec.sourceBlock, sequence: rec.sequence, repair: m.outerCode === 1 && rec.sequence >= tx.plan.blocks[rec.sourceBlock].count };
-    const body = entry ? dataBody(tx, entry) : tx.manifestBody;
-    return buildObjectFrame({ profile, sessionId: session.sessionId, sequence: rec.sequence, frameType: rec.frameType, sourceBlock: rec.sourceBlock, body, fec });
-  };
+  const frameOf = frameRegenerator(profile, session);
   const serOf = (symbols, frame) => {
     let e = 0;
     for (const i of index) if (symbols[i] !== frame[i]) e++;
@@ -101,7 +115,8 @@ export async function analyzeFailedCaptures(profile, session, failed, { rawSampl
   };
   const pilots = pilotLayoutFor(profile, 'file');
   const rawPick = new Set();
-  if (rawSamples > 0) {
+  // Raw samples serve the luma mixing model (mixing-replay.mjs): gray profiles only.
+  if (rawSamples > 0 && profile.levels <= 4) {
     const data = failed.map((r, k) => (r.values && r.frameType === FRAME_TYPE.DATA ? k : -1)).filter((k) => k >= 0);
     const n = Math.min(rawSamples, data.length);
     for (let j = 0; j < n; j++) rawPick.add(data[Math.floor(((j + 0.5) * data.length) / n)]);

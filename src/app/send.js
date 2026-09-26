@@ -1,9 +1,13 @@
-// Simple send page (send.html): choose a file, confirm the photosensitivity
-// warning, and the file is shown as a loop of frames until "停止". Uses the
-// measured operating point of P1 (SPEC §3, §10.1): 33.3 ms per logical frame
-// plus a 16.7 ms guard, inner FEC rate 2, the random linear outer code.
+// Simple send page (send.html): choose a file and a mode, confirm the
+// photosensitivity warning, and the file is shown as a loop of frames until
+// "停止". The modes are measured operating points (SPEC §3, §10.1), all with
+// the random linear outer code; the receive page tells them apart by the
+// profile ID in the frame headers.
 
 import { PROFILES, RENDER_LEVELS } from '../common/profiles.js';
+import { paletteFor, writeSymbolsRgbPalette } from '../common/color.js';
+import { encodeQr, drawQr } from '../common/qr.js';
+import { receivePageUrl } from './receive-url.js';
 import { prepareTransfer, buildCarouselFrame, DEFAULT_MAX_OBJECT_BYTES, OUTER_CODE_RLNC } from '../common/object-frame.js';
 import { linearMeanGray } from '../common/luminance.js';
 import { WakeLock } from '../common/wake-lock.js';
@@ -11,12 +15,23 @@ import { writeSymbolsRgba } from '../sender/mapper.js';
 import { CanvasRenderer } from '../sender/renderer-canvas.js';
 import { FrameClock } from '../sender/frame-clock.js';
 
-const PROFILE = PROFILES.P1;
-const FEC_RATE = 2;
-const FRAME_MS = 1000 / 30; // content of one logical frame
-const GUARD_MS = 1000 / 60; // gray guard after it
+// frameMs: content of one logical frame; guardMs: gray guard after it;
+// secondsPerMiB: measured handheld on the two test phones (2026-09);
+// maxScale: fixed pattern size in display px per cell (null = the size
+// chosen). The colour modes stay small: the red of their fine pattern
+// flickers within the WCAG red-flash limit only while the pattern is small in
+// the field of view (tools/flash-check.mjs, SPEC §16.3).
+const MODES = Object.freeze({
+  // 8 colours, 50 ms frames: whatever the camera phase, nearly every frame
+  // gets one clean capture. Upright or sideways on both phones.
+  standard: { profile: PROFILES.P3, fec: 3, frameMs: 50, guardMs: 0, secondsPerMiB: [12, 25], maxScale: 6 },
+  // Finer grid: upright only on the newer phone, sideways on both.
+  fast: { profile: PROFILES.P4, fec: 3, frameMs: 50, guardMs: 0, secondsPerMiB: [9, 17], maxScale: 6 },
+  // Gray 4-PAM (P1, the freeze candidate), as before 2026-09-27.
+  compat: { profile: PROFILES.P1, fec: 2, frameMs: 1000 / 30, guardMs: 1000 / 60, secondsPerMiB: [25, 30], maxScale: null },
+});
+const MODE_KEY = 'vdl-send-mode';
 const MANIFEST_INTERVAL_MS = 2000;
-const SECONDS_PER_MIB = [25, 30]; // handheld, measured
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -26,6 +41,10 @@ const els = {
   file: $('file'),
   fileInfo: $('file-info'),
   size: $('size'),
+  mode: $('mode'),
+  setupQr: $('setup-qr'),
+  sendingQr: $('sending-qr'),
+  qrToggle: $('qr-toggle'),
   start: $('start'),
   sending: $('sending'),
   sendInfo: $('send-info'),
@@ -38,9 +57,8 @@ const els = {
   warningCancel: $('warning-cancel'),
 };
 
-const levels = RENDER_LEVELS[PROFILE.levels];
-const guardGray = linearMeanGray(levels);
 const state = {
+  mode: MODES.standard,
   file: null, // { bytes, name, mime, sha256 }
   transfer: null,
   running: false,
@@ -53,8 +71,21 @@ const state = {
 const wakeLock = new WakeLock();
 const renderer = new CanvasRenderer(els.canvas);
 const clock = new FrameClock(onTick);
-const symbols = new Uint8Array(PROFILE.gridWidth * PROFILE.gridHeight);
-const imageData = new ImageData(PROFILE.gridWidth, PROFILE.gridHeight);
+// Per mode: gray levels or colour palette, and the frame buffers.
+let draw = null;
+function prepareDrawing(mode) {
+  const p = mode.profile;
+  const palette = paletteFor(null, p);
+  const levels = RENDER_LEVELS[p.levels];
+  draw = {
+    palette,
+    levels,
+    guardGray: palette ? null : linearMeanGray(levels),
+    margin: palette ? palette[0][0] : levels[0],
+    symbols: new Uint8Array(p.gridWidth * p.gridHeight),
+    imageData: new ImageData(p.gridWidth, p.gridHeight),
+  };
+}
 
 const fmtBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(2)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${n} B`);
 
@@ -72,10 +103,11 @@ function showError(message) {
   els.error.hidden = !message;
 }
 
-// Refresh counts closest to the target durations (SPEC §10.1): 2 + 1 at 60 Hz.
-function timing() {
+// Refresh counts closest to the target durations (SPEC §10.1), e.g. 3 + 0
+// or 2 + 1 at 60 Hz.
+function timing(mode) {
   const hz = clock.refreshHz ?? 60;
-  return { dwell: Math.max(1, Math.round((FRAME_MS * hz) / 1000)), guard: Math.max(1, Math.round((GUARD_MS * hz) / 1000)), hz };
+  return { dwell: Math.max(1, Math.round((mode.frameMs * hz) / 1000)), guard: mode.guardMs ? Math.max(1, Math.round((mode.guardMs * hz) / 1000)) : 0, hz };
 }
 
 // ---------------------------------------------------------------- file
@@ -97,11 +129,37 @@ async function loadFile(file) {
     showError(`ファイルを読めませんでした / Could not read the file: ${e.message}`);
     return;
   }
+  showFileInfo();
+  els.start.disabled = false;
+}
+
+function showFileInfo() {
+  if (!state.file) return;
   const mib = state.file.bytes.length / 1048576;
-  const [lo, hi] = SECONDS_PER_MIB.map((s) => Math.max(3, Math.round(s * mib)));
+  const [lo, hi] = state.mode.secondsPerMiB.map((s) => Math.max(3, Math.round(s * mib)));
   const secs = lo === hi ? `${lo}` : `${lo}〜${hi}`;
   setText(els.fileInfo, `${state.file.name}（${fmtBytes(state.file.bytes.length)}）受け取りの目安: ${lo === hi ? '約 ' : ''}${secs} 秒`, `Estimated reception time: ${lo === hi ? 'about ' : ''}${secs.replace('〜', '–')} s`);
-  els.start.disabled = false;
+}
+
+// The chosen mode is kept for the next visit.
+function selectMode(key) {
+  state.mode = MODES[key] ?? MODES.standard;
+  els.mode.value = MODES[key] ? key : 'standard';
+  try {
+    localStorage.setItem(MODE_KEY, els.mode.value);
+  } catch {
+    // Storage unavailable: the choice is simply not kept.
+  }
+  // Fixed size: shown as "小さめ" and not selectable.
+  if (state.mode.maxScale) els.size.value = String(state.mode.maxScale);
+  els.size.disabled = !!state.mode.maxScale;
+  showFileInfo();
+}
+els.mode.addEventListener('change', () => selectMode(els.mode.value));
+try {
+  selectMode(localStorage.getItem(MODE_KEY) ?? 'standard');
+} catch {
+  selectMode('standard');
 }
 
 els.file.addEventListener('change', () => {
@@ -125,14 +183,17 @@ els.drop.addEventListener('drop', (e) => {
 // ---------------------------------------------------------------- rendering
 
 function drawFrame(slot) {
+  const { symbols, imageData } = draw;
   buildCarouselFrame(state.transfer, slot, symbols);
-  writeSymbolsRgba(symbols, PROFILE.levels, imageData.data, levels);
-  renderer.render(imageData, levels[0]);
+  if (draw.palette) writeSymbolsRgbPalette(symbols, draw.palette, imageData.data);
+  else writeSymbolsRgba(symbols, state.transfer.profile.levels, imageData.data, draw.levels);
+  renderer.render(imageData, draw.margin);
 }
 
-// Guard: the outline (the receiver keeps tracking) around uniform gray.
+// Guard (gray modes): the outline (the receiver keeps tracking) around uniform gray.
 function drawGuard() {
-  const { gridWidth: w, gridHeight: h } = PROFILE;
+  const { levels, guardGray, imageData } = draw;
+  const { gridWidth: w, gridHeight: h } = state.transfer.profile;
   const d = imageData.data;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -142,7 +203,7 @@ function drawGuard() {
       d[o + 3] = 255;
     }
   }
-  renderer.render(imageData, levels[0]);
+  renderer.render(imageData, draw.margin);
 }
 
 function onTick(vsync) {
@@ -194,7 +255,8 @@ async function toggleFullscreen() {
 
 async function start() {
   if (state.running || !state.file) return;
-  const t = timing();
+  const mode = state.mode;
+  const t = timing(mode);
   if (!state.warned) {
     if (!(await confirmWarning(t.hz / (t.dwell + t.guard)))) return;
     state.warned = true;
@@ -203,8 +265,8 @@ async function start() {
   const f = state.file;
   try {
     state.transfer = prepareTransfer({
-      profile: PROFILE,
-      fec: FEC_RATE,
+      profile: mode.profile,
+      fec: mode.fec,
       // A new object gets a new random session ID (SPEC §12).
       sessionId: crypto.getRandomValues(new Uint32Array(1))[0],
       bytes: f.bytes,
@@ -218,7 +280,8 @@ async function start() {
     showError(e.message);
     return;
   }
-  renderer.maxScale = Number(els.size.value) || Infinity;
+  prepareDrawing(mode);
+  renderer.maxScale = mode.maxScale ?? (Number(els.size.value) || Infinity);
   state.timing = t;
   state.startVsync = clock.vsync;
   state.frame = -1;
@@ -239,6 +302,23 @@ async function stop() {
   els.setup.hidden = false;
   await wakeLock.release();
 }
+
+// ---------------------------------------------------------------- receive page QR
+
+// Always under the start button; while sending, on request in a strip above
+// the pattern (the stage shrinks and the renderer lays the pattern out again).
+receivePageUrl().then((url) => {
+  if (!url) return;
+  const qr = encodeQr(url, { ecl: 'M' });
+  drawQr($('setup-qr-canvas'), qr, 6);
+  drawQr($('sending-qr-canvas'), qr, 6);
+  $('setup-qr-url').textContent = url;
+  els.setupQr.hidden = false;
+  els.qrToggle.hidden = false;
+});
+els.qrToggle.addEventListener('click', () => {
+  els.sendingQr.hidden = !els.sendingQr.hidden;
+});
 
 els.start.addEventListener('click', start);
 els.stop.addEventListener('click', stop);

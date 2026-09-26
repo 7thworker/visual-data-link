@@ -9,7 +9,7 @@ let canvas = null;
 let ctx = null;
 
 self.onmessage = (e) => {
-  const { id, bitmap, roi, quad, profile, pattern, radius, scale = 1, compare = true, orient = false, order } = e.data;
+  const { id, bitmap, roi, quad, profile, pattern, radius, scale = 1, compare = true, orient = false, order, interior = false } = e.data;
   try {
     const t0 = performance.now();
     const cw = Math.max(1, Math.round(roi.w * scale));
@@ -22,7 +22,7 @@ self.onmessage = (e) => {
     bitmap.close();
     const { data } = ctx.getImageData(0, 0, cw, ch);
     const t1 = performance.now();
-    const r = processRegion({ data, width: cw, height: ch }, quad, profileFromDescription(profile), { radius, pattern, compare, orient, ...(order ? { order } : {}) }, {
+    const r = processRegion({ data, width: cw, height: ch }, quad, profileFromDescription(profile), { radius, pattern, compare, orient, interior, ...(order ? { order } : {}) }, {
       x0: roi.x0,
       y0: roi.y0,
       sx: cw / roi.w,
@@ -53,7 +53,7 @@ self.onmessage = (e) => {
       pilot: r.pilot && { global: r.pilot.global },
       readScale: r.readScale,
     };
-    const arrays = [out.symbols, out.values, out.confidence, out.soft?.coord, out.soft?.spacing, ...Object.values(out.alternatives ?? {})].filter(Boolean);
+    const arrays = [out.symbols, out.values, out.confidence, out.soft?.coord, out.soft?.spacing, out.soft?.bits, out.rgb, ...Object.values(out.alternatives ?? {})].filter(Boolean);
     self.postMessage({ id, r: out, readMs: t1 - t0, procMs: t2 - t1 }, arrays.map((a) => a.buffer));
   } catch (err) {
     bitmap?.close?.();

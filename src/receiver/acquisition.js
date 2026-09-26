@@ -81,7 +81,7 @@ export function pixelsPerCell(q, gridWidth, gridHeight) {
 const EDGE_SPANS = [1, 4, 8];
 
 // Position (along the inward profile) of the outermost strong rising step, or null.
-function findEdge(profile, step, opts) {
+export function findEdge(profile, step, opts) {
   for (const span of EDGE_SPANS) {
     const pos = findEdgeAt(profile, step, opts, span);
     if (pos !== null) return pos;
@@ -100,17 +100,34 @@ function findEdgeAt(profile, step, opts, span) {
   }
   if (best < opts.minContrast * 2) return null; // the difference spans two or more steps
   const thr = best * opts.relativeThreshold;
+  // Look-ahead from the first sample above the threshold (at or outside the
+  // outline's outer edge): 1 cell. Behind the brightest-level outline the
+  // payload can only stay or fall, so the next rising step inside is 2 cells
+  // or more from the outer edge.
+  const ahead = Math.max(2, Math.round((opts.cellSize ?? 5) / step));
   for (let i = 1; i < n - 1; i++) {
     if (grad[i] < thr) continue;
+    // The strongest step within the look-ahead is the outline's outer edge.
+    // Taking the first local maximum instead put the edge on the glow outside
+    // the outline (a gentle ramp over ~5 px before the step, at about the
+    // threshold) and, for spans > 1, on the outer end of the plateau that a
+    // wide difference makes of a step: corners 2-6 px outside the screen, the
+    // cause of 7 of 8 failed transfer captures examined (2026-09-26).
     let k = i;
-    while (k + 1 < n - 1 && grad[k + 1] >= grad[k]) k++;
-    // Sub-sample peak by parabola fit through (k-1, k, k+1).
-    const a = grad[k - 1];
-    const b = grad[k];
-    const c = grad[k + 1];
-    const den = a - 2 * b + c;
-    const off = den < 0 ? (0.5 * (a - c)) / den : 0;
-    return (k + Math.max(-0.5, Math.min(0.5, off))) * step;
+    for (let j = i + 1; j < Math.min(n - 1, i + ahead); j++) if (grad[j] > grad[k]) k = j;
+    // Centroid of the contiguous samples above half the peak around it.
+    const half = 0.5 * grad[k];
+    let a = k;
+    let b = k;
+    while (a > 1 && grad[a - 1] >= half) a--;
+    while (b < n - 2 && grad[b + 1] >= half) b++;
+    let sw = 0;
+    let sx = 0;
+    for (let j = a; j <= b; j++) {
+      sw += grad[j] - half;
+      sx += (grad[j] - half) * j;
+    }
+    return (sw ? sx / sw : k) * step;
   }
   return null;
 }

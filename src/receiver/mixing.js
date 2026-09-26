@@ -190,3 +190,94 @@ export function levelShape(centers) {
   for (let l = 1; l < q.length; l++) if (!(q[l] > q[l - 1])) return null;
   return q;
 }
+
+// ---------------------------------------------------------------- colour profiles
+
+// Colour profiles (palette 'rgb8'): each channel of a symbol depends only on
+// its own bit (bits 2 / 1 / 0 = R / G / B), so per tile, over the pilot cells
+// and the three channels,
+//
+//   v_c = alpha_c + K_c * (beta * bit_c(level in N) + gamma * bit_c(level in P))
+//
+// with K_c the clean contrast of channel c (learned from clean captures,
+// colour-demod.js channelGains). Five unknowns from 3 x L equations: a
+// channel whose bits in N and P are not separable at this pilot shift (e.g.
+// red for a shift of 4) is covered by the others.
+export function fitMixingRgb(rgb, profile, layout, shiftN, shiftP, gains) {
+  const L = profile.levels;
+  if (((shiftN - shiftP) % L + L) % L === 0) return null;
+  const geo = tileGeometry(profile, layout);
+  const out = Array.from({ length: 5 }, () => new Float64Array(geo.T).fill(NaN));
+  const A = new Float64Array(25);
+  const b = new Float64Array(5);
+  const row = new Float64Array(5);
+  for (let t = 0; t < geo.T; t++) {
+    A.fill(0);
+    b.fill(0);
+    let n = 0;
+    for (let m = 0; m < L; m++) {
+      const k = t * L + m;
+      const i = layout.cells[k];
+      if (Number.isNaN(rgb[3 * i])) continue;
+      const sN = (layout.levels[k] + shiftN) % L;
+      const sP = (layout.levels[k] + shiftP) % L;
+      for (let c = 0; c < 3; c++) {
+        const mask = 4 >> c;
+        row.fill(0);
+        row[c] = 1;
+        row[3] = gains[c] * (sN & mask ? 1 : 0);
+        row[4] = gains[c] * (sP & mask ? 1 : 0);
+        const v = rgb[3 * i + c];
+        for (let r = 0; r < 5; r++) {
+          b[r] += row[r] * v;
+          for (let q = 0; q < 5; q++) A[r * 5 + q] += row[r] * row[q];
+        }
+        n++;
+      }
+    }
+    if (n < 6) continue;
+    const x = solveLinear(A, b, 5);
+    if (!x) continue;
+    for (let r = 0; r < 5; r++) out[r][t] = x[r];
+  }
+  const s = out.map((a) => smooth(a, geo.tx, geo.ty, SMOOTH_SIGMA_TILES));
+  const shares = [];
+  for (let t = 0; t < geo.T; t++) {
+    const tot = s[3][t] + s[4][t];
+    if (tot > 1e-6) shares.push(Math.max(0, Math.min(1, s[4][t] / tot)));
+  }
+  shares.sort((x, y) => x - y);
+  return { alpha: s.slice(0, 3), beta: s[3], gamma: s[4], share: shares.length ? shares[shares.length >> 1] : 0, geo };
+}
+
+// Cancels the known partner frame of a colour capture: per channel the
+// remainder over K_c * beta is the soft bit coordinate of N (colour-demod.js).
+export function cancelPartnerRgb(rgb, profile, fit, partner, gains, cells) {
+  const { gridWidth: w } = profile;
+  const n = rgb.length / 3;
+  const lat = lattice(profile, fit.geo);
+  const symbols = new Uint8Array(n);
+  const confidence = new Float32Array(n).fill(0);
+  const bits = new Float32Array(3 * n).fill(NaN);
+  for (const i of cells) {
+    const x = i % w;
+    const y = Math.floor(i / w);
+    const b = interp(fit.beta, lat, x, y);
+    const g = interp(fit.gamma, lat, x, y);
+    if (!(b > 0) || Number.isNaN(rgb[3 * i]) || !(b / (Math.abs(b) + Math.abs(g)) >= MIN_BETA)) continue;
+    let s = 0;
+    let conf = 1;
+    for (let c = 0; c < 3; c++) {
+      const mask = 4 >> c;
+      const a = interp(fit.alpha[c], lat, x, y);
+      const u = (rgb[3 * i + c] - a - gains[c] * g * (partner[i] & mask ? 1 : 0)) / (gains[c] * b);
+      const uc = Math.max(-0.5, Math.min(1.5, u));
+      bits[3 * i + c] = uc;
+      if (uc >= 0.5) s |= mask;
+      conf = Math.min(conf, Math.min(1, 2 * Math.abs(uc - 0.5)));
+    }
+    symbols[i] = s;
+    confidence[i] = conf;
+  }
+  return { ok: true, symbols, confidence, soft: { bits } };
+}

@@ -11,7 +11,8 @@
 
 import { computeHomography, logicalCorners } from './homography.js';
 import { refineFromProfiles, profilesCpu, pixelsPerCell } from './acquisition.js';
-import { sampleCells, DEFAULT_KERNEL } from './sampler.js';
+import { sampleCells, sampleCellsRgb, DEFAULT_KERNEL } from './sampler.js';
+import { classifyColourGrid, classifyRgb27 } from './colour-demod.js';
 import { kmeans1d, classify } from './demodulator.js';
 import { estimateLevelSurfaces, classifyLocal, classifyGlobal, estimateLevelGrid, classifyGrid } from './pilot-demod.js';
 import { hasPilots, hasHeader, payloadMask, pilotLayoutFor } from '../common/test-frame.js';
@@ -20,6 +21,7 @@ import { bitsToHeader, decodeHeader } from '../common/header.js';
 import { FRAME_TYPE } from '../common/protocol.js';
 import { shiftedPilotLayout } from '../common/pilots.js';
 import { objectPilotShift } from '../common/object-frame.js';
+import { refineInterior, spreadCpu } from './interior-refine.js';
 
 // A sample source provides the two things the chain reads from the camera
 // image: refinement profiles and per-cell mean luma. The CPU source reads an
@@ -29,6 +31,8 @@ export function cpuSource(img) {
     kind: 'cpu',
     profiles: (quad, radius) => profilesCpu(img, quad, radius),
     cells: (H, w, h, k) => sampleCells(img, H, w, h, k),
+    cellsRgb: (H, w, h, k) => sampleCellsRgb(img, H, w, h, k),
+    spread: (H, patches, offsets) => spreadCpu(img, H, patches, offsets),
   };
 }
 
@@ -84,6 +88,39 @@ function outlineMatch(values, profile, darkest, brightest) {
     }
   }
   return ok / n;
+}
+
+// Mean value of the outline cells (the brightest level on every frame).
+function outlineMean(values, profile) {
+  const { gridWidth: w, gridHeight: h } = profile;
+  let sum = 0;
+  let n = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x !== 0 && y !== 0 && x !== w - 1 && y !== h - 1) continue;
+      if (Number.isNaN(values[y * w + x])) continue;
+      sum += values[y * w + x];
+      n++;
+    }
+  }
+  return n ? sum / n : NaN;
+}
+// The interior refinement may land a whole cell off where the corners were
+// about half a cell out (the spread is periodic in the cell size); the
+// outline then samples payload or the dark surroundings. A refinement is kept
+// only if it does not darken the outline by more than the tolerance (luma)
+// and the outline stays brighter than OUTLINE_QUANTILE of the cells (the
+// outline is the brightest level; the comparison with the edge-based result
+// alone fails when that one already sampled mostly outside).
+const INTERIOR_OUTLINE_TOLERANCE = 3;
+const OUTLINE_QUANTILE = 0.6;
+
+function outlinePlausible(values, profile) {
+  const sample = [];
+  for (let i = 0; i < values.length; i += 7) if (!Number.isNaN(values[i])) sample.push(values[i]);
+  if (!sample.length) return false;
+  sample.sort((a, b) => a - b);
+  return outlineMean(values, profile) > sample[Math.floor(OUTLINE_QUANTILE * (sample.length - 1))];
 }
 
 // Frame corners (TL, TR, BR, BL) as indices into the image-order quad
@@ -163,7 +200,9 @@ function capturePilots(values, profile, pattern) {
 // so that a rolled, sideways or mirrored view works (SPEC §4.1 without finder
 // markers). result.imageCorners: refined corners in image order (for
 // tracking); result.corners: in frame order; result.order / orientation.
-export function processCapture(img, quad, profile, { radius, kernel = DEFAULT_KERNEL, refine = true, pattern = 'prbs', compare = true, orient = false, order = IDENTITY_ORDER } = {}) {
+// options.interior: refine the corners from the frame's interior after the
+// edges (interior-refine.js), when the source supports it.
+export function processCapture(img, quad, profile, { radius, kernel = DEFAULT_KERNEL, refine = true, pattern = 'prbs', compare = true, orient = false, order = IDENTITY_ORDER, interior = false } = {}) {
   const source = asSource(img);
   const cellSize = orient ? orientFreeCellSize(quad, profile) : pixelsPerCell(applyOrder(quad, order), profile.gridWidth, profile.gridHeight).min;
   const refined = refine ? refineFromProfiles(source.profiles(quad, radius), quad, radius, { cellSize }) : { ok: true, corners: quad };
@@ -208,6 +247,23 @@ export function processCapture(img, quad, profile, { radius, kernel = DEFAULT_KE
     }
     values = source.cells(H, w, h, kernel);
   }
+  if (interior && source.spread) {
+    const ir = refineInterior((Hq, patches, offsets) => source.spread(Hq, patches, offsets), H, profile, pixelsPerCell(corners, w, h).min);
+    result.interior = ir && { moved: +ir.moved.toFixed(2), before: Math.round(ir.before), after: Math.round(ir.after), patches: ir.patches };
+    if (ir) {
+      const v = source.cells(ir.H, w, h, kernel);
+      if (outlineMean(v, profile) >= outlineMean(values, profile) - INTERIOR_OUTLINE_TOLERANCE && outlinePlausible(v, profile)) {
+        H = ir.H;
+        corners = ir.corners;
+        values = v;
+        const back = new Array(4);
+        result.order.forEach((i, j) => (back[i] = corners[j]));
+        result.imageCorners = back;
+      } else {
+        result.interior = { rejected: 'outline' };
+      }
+    }
+  }
   result.corners = corners;
   // The corners are trustworthy from here on (each edge verified as the
   // outline, orientation known) even if the capture turns out undecodable
@@ -233,6 +289,42 @@ export function processCapture(img, quad, profile, { radius, kernel = DEFAULT_KE
     result.pilotShift = shift;
     // Header fields read from the raw values ("file"), e.g. for profile identification.
     result.headerFields = header;
+    if (profile.palette) {
+      // Colour profile: the header and outline (black / white) read on luma
+      // above; every cell is decided in RGB (colour-demod.js).
+      if (!source.cellsRgb) {
+        result.reason = 'no-rgb-source';
+        return result;
+      }
+      const n = w * h;
+      const symbols = new Uint8Array(n);
+      const confidence = new Float32Array(n);
+      // 27 colours: additive colour model, no soft values yet (no combining).
+      const rgb27 = profile.palette === 'rgb27';
+      const bits = hasHeader(pattern) && !rgb27 ? new Float32Array(3 * n) : null;
+      const rgb = source.cellsRgb(H, w, h, kernel);
+      const c = rgb27 ? classifyRgb27(rgb, profile, pilotLayout, symbols, confidence) : classifyColourGrid(rgb, profile, pilotLayout, symbols, confidence, bits);
+      if (!(c.lumaCenters[levels - 1] > c.lumaCenters[0])) {
+        result.reason = 'pilot-fit-failed';
+        return result;
+      }
+      result.symbols = symbols;
+      result.confidence = confidence;
+      // Soft bit coordinates per channel (colour-demod.js) for combining.
+      result.soft = bits ? { bits } : null;
+      result.centers = c.lumaCenters;
+      // Cell colours and channel contrasts for cancelling a mixed-in frame (mixing.js).
+      result.rgb = rgb;
+      result.channelGains = c.channelGains;
+      result.method = 'pilot-grid-rgb';
+      result.outlineMatch = outlineMatch(values, profile, c.lumaCenters[0], c.lumaCenters[levels - 1]);
+      if (result.outlineMatch < MIN_OUTLINE_MATCH) {
+        result.reason = 'outline-mismatch';
+        return result;
+      }
+      result.ok = true;
+      return result;
+    }
     const est = estimateLevelSurfaces(values, profile, pilotLayout);
     if (!est) {
       result.reason = 'pilot-fit-failed';

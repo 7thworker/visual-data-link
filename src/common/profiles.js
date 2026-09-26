@@ -28,6 +28,11 @@ export const PROFILES = Object.freeze({
   P1: defineProfile({ id: 1, key: 'P1', name: 'P1 Base', gridWidth: 160, gridHeight: 90, levels: 4, dwellRefreshes: 6 }),
   // SPEC allows 3–4 refreshes; 4 (66.7 ms) is the default until measured.
   P2: defineProfile({ id: 2, key: 'P2', name: 'P2 Fast candidate', gridWidth: 240, gridHeight: 135, levels: 4, dwellRefreshes: 4 }),
+  // 8 colours (common/color.js), 3 refreshes without a guard (SPEC §3, 2026-09-27):
+  // P3 reads held upright or sideways on both test phones (1 MiB in 12-25 s),
+  // P4 held upright only on the newer one (8.5-9.3 s), sideways on both.
+  P3: defineProfile({ id: 3, key: 'P3', name: 'P3 Colour', gridWidth: 200, gridHeight: 112, levels: 8, dwellRefreshes: 3, palette: 'rgb8' }),
+  P4: defineProfile({ id: 4, key: 'P4', name: 'P4 Colour fine', gridWidth: 240, gridHeight: 135, levels: 8, dwellRefreshes: 3, palette: 'rgb8' }),
 });
 
 export function getProfileById(id) {
@@ -40,24 +45,34 @@ function assertInt(name, value, min, max) {
   }
 }
 
+// Colour palettes of experimental profiles (common/color.js): symbols drawn
+// as colours instead of grays, with the number of symbols each needs. 27
+// colours (3 levels per channel) are not a power of two: 19 bits per 4 cells
+// (fec.js symbolGrouping) and 9-colour pilot tiles (pilots.js).
+export const PALETTE_LEVELS = Object.freeze({ rgb8: 8, rgb27: 27 });
+export const PALETTES = Object.freeze(Object.keys(PALETTE_LEVELS));
+
 // Ad-hoc configuration for experiments (SPEC §3 "Experimental profiles").
 // Its parameters must be logged because the ID alone does not identify them.
-export function makeExperimentalProfile({ id = EXPERIMENTAL_ID_MIN, gridWidth, gridHeight, levels, dwellRefreshes }) {
+// palette: null (grays) or 'rgb8' (8 symbols as the corners of the RGB cube).
+export function makeExperimentalProfile({ id = EXPERIMENTAL_ID_MIN, gridWidth, gridHeight, levels, dwellRefreshes, palette = null }) {
   assertInt('id', id, EXPERIMENTAL_ID_MIN, EXPERIMENTAL_ID_MAX);
   assertInt('gridWidth', gridWidth, GRID_MIN, GRID_MAX);
   assertInt('gridHeight', gridHeight, GRID_MIN, GRID_MAX);
   assertInt('dwellRefreshes', dwellRefreshes, 1, DWELL_MAX);
-  if (!SUPPORTED_LEVELS.includes(levels)) {
+  if (palette !== null && PALETTE_LEVELS[palette] !== levels) throw new RangeError(`palette ${palette} needs ${PALETTE_LEVELS[palette] ?? '?'} levels`);
+  if (!SUPPORTED_LEVELS.includes(levels) && !(palette && PALETTE_LEVELS[palette] === levels)) {
     throw new RangeError(`levels must be one of ${SUPPORTED_LEVELS.join(', ')}, got ${levels}`);
   }
   return defineProfile({
     id,
     key: 'EXP',
-    name: `Experimental 0x${id.toString(16)} ${gridWidth}x${gridHeight} L${levels}`,
+    name: `Experimental 0x${id.toString(16)} ${gridWidth}x${gridHeight} L${levels}${palette ? ` ${palette}` : ''}`,
     gridWidth,
     gridHeight,
     levels,
     dwellRefreshes,
+    palette,
   });
 }
 
@@ -82,11 +97,12 @@ export function profileFromDescription(p) {
     gridHeight: p.gridHeight,
     levels: p.levels,
     dwellRefreshes: p.dwellRefreshes,
+    palette: p.palette ?? null,
   });
 }
 
 // Serializable description for test logs.
 export function describeProfile(profile) {
-  const { id, key, name, gridWidth, gridHeight, levels, dwellRefreshes, experimental } = profile;
-  return { id, key, name, gridWidth, gridHeight, levels, bitsPerSymbol: bitsPerSymbol(levels), dwellRefreshes, experimental };
+  const { id, key, name, gridWidth, gridHeight, levels, dwellRefreshes, experimental, palette = null } = profile;
+  return { id, key, name, gridWidth, gridHeight, levels, bitsPerSymbol: bitsPerSymbol(levels), dwellRefreshes, experimental, ...(palette ? { palette } : {}) };
 }

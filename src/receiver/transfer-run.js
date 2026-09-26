@@ -5,7 +5,7 @@
 
 import { ObjectReceiver, toHex } from './object-receiver.js';
 import { OUTER_CODE_RLNC, OUTER_CODES } from '../common/object-frame.js';
-import { analyzeFailedCaptures } from './failure-analysis.js';
+import { analyzeFailedCaptures, frameRegenerator, packBits, packSymbols, toBase64 } from './failure-analysis.js';
 
 // Failed captures kept per trial for failure-analysis.js (~70 KB each).
 const KEEP_FAILED = 250;
@@ -33,6 +33,10 @@ export class TransferRun {
     this.results = [];
     this.analyses = [];
     this.lastObject = null; // { data, name, mime, size, sha256 } of the last verified object
+    // Failed captures saved as images (m1.js), with the frame they showed once
+    // the trial's object is verified: { trial, ...header fields, expected }.
+    this.captureSamples = [];
+    this.trialCaptures = [];
     this.finished = false;
     this.#newTrial(startT);
   }
@@ -54,6 +58,19 @@ export class TransferRun {
   add(t, result, opts) {
     if (this.finished) return null;
     return this.rx.add(t, result, opts);
+  }
+
+  // Header fields of the capture just added, when it had a valid header.
+  lastFields() {
+    return this.rx.lastFields ?? null;
+  }
+
+  // A failed capture saved as an image; its true symbols (the full frame,
+  // packed four per byte, base64) are attached when the trial completes.
+  noteCapture(entry) {
+    entry.trial = this.results.length + 1;
+    this.trialCaptures.push(entry);
+    this.captureSamples.push(entry);
   }
 
   #onComplete(s) {
@@ -103,6 +120,19 @@ export class TransferRun {
         .then((a) => (result.failureAnalysis = a))
         .catch((e) => (result.failureAnalysis = { error: String(e?.message ?? e) })),
     );
+    if (this.trialCaptures.length) {
+      const frameOf = frameRegenerator(this.profile, s);
+      for (const c of this.trialCaptures) {
+        if (c.sessionId !== s.sessionId) continue;
+        try {
+          c.expectedBits = packBits(this.profile);
+          c.expected = toBase64(packSymbols(frameOf(c), c.expectedBits));
+        } catch (e) {
+          c.expectedError = String(e?.message ?? e);
+        }
+      }
+      this.trialCaptures = [];
+    }
     this.lastObject = { data: s.data, name: s.name, mime: s.mime, size: m.size, sha256: toHex(m.sha256), trial: this.results.length };
     if (this.results.length >= this.target) {
       this.finished = true;

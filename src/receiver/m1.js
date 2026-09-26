@@ -4,6 +4,7 @@
 // the outline edge and tracked on every processed frame.
 
 import { describeProfile, profileFromDescription, RENDER_LEVELS, bitsPerSymbol, PROFILES } from '../common/profiles.js';
+import { meanPeriodRefreshes } from '../common/schedule.js';
 import { buildTestFrame, hasPilots, hasHeader, payloadMask } from '../common/test-frame.js';
 import { recommendLevels, spacingUniformity, minSeparation } from './calibration.js';
 import { PILOT_DEMOD_METHOD, PILOT_GRID_METHOD } from './pilot-demod.js';
@@ -40,13 +41,24 @@ const GREEN_HOLD_MS = 600;
 // layout, accept the one whose header validates), most likely first; failed
 // acquisitions before trying the next candidate, and before a confirmed
 // profile is given up.
-const PROFILE_CANDIDATES = [PROFILES.P1, PROFILES.P2, PROFILES.P0];
+// P3 first: what the simple send page shows by default (2026-09-27).
+const PROFILE_CANDIDATES = [PROFILES.P3, PROFILES.P1, PROFILES.P4, PROFILES.P2, PROFILES.P0];
 const PROFILE_TRY_FAILURES = 3;
 const PROFILE_DROP_FAILURES = 60;
 // Camera px per cell below which the status suggests moving closer.
 const SMALL_PPC = 8.5;
+// 27 colours need more: they collapsed on moving frames at 11 px (55-79% of
+// the captures failed) but not at 15.8 px (26%), 2026-09-26. 8 colours with 3
+// refreshes per frame read held upright at 8-9 px (P3 / P4, 2026-09-27).
+const smallPpc = (profile) => (profile?.palette === 'rgb27' ? 15 : SMALL_PPC);
 // Per-capture records in the transfer log (~30 per second, i.e. 5+ minutes).
 const MAX_TRANSFER_RECORDS = 10000;
+// Failed captures saved as full-resolution images during a file reception
+// (diagnostics, dev server only): at most this many per reception, this far
+// apart. Each costs one 4K canvas draw (~70 ms, a skipped camera frame or
+// two) and a ~15 MB PNG upload.
+const FAILED_CAPTURES_MAX = 8;
+const FAILED_CAPTURE_GAP_MS = 1500;
 const DETECT_SHORT_SIDE = 360; // downscaled short side for detection
 const READ_TARGET_PPC = 7; // automatic read scale: camera px per cell after downscaling
 const READ_MIN_SCALE = 0.4;
@@ -172,6 +184,8 @@ export class M1Controller {
     this.reception = null; // continuous dynamic-frame reception (Milestone 4)
     this.transfer = null; // file reception (Milestone 6), TransferRun
     this.lastTransfer = null; // log of the last finished file reception
+    this.saveFailedCaptures = false; // save FEC-failed captures as images during a file reception
+    this.interiorRefine = true; // refine the corners from the frame's interior (interior-refine.js)
     this.frameTime = 0;
     this.pool = null; // WorkerPool, or null for main-thread processing
     this.gl = null; // GlSampler when processing on the GPU
@@ -263,7 +277,7 @@ export class M1Controller {
         this.candidateFailures = 0;
         return;
       }
-      const other = PROFILE_CANDIDATES.find((p) => p.id === id);
+      const other = this.#candidates().find((p) => p.id === id);
       if (other) this.#setProfile(other);
       return;
     }
@@ -275,8 +289,16 @@ export class M1Controller {
     this.candidateFailures++;
     const limit = this.profileConfirmed ? PROFILE_DROP_FAILURES : PROFILE_TRY_FAILURES;
     if (this.candidateFailures < limit) return;
-    const i = PROFILE_CANDIDATES.indexOf(this.profile);
-    this.#setProfile(PROFILE_CANDIDATES[(i + 1) % PROFILE_CANDIDATES.length]);
+    const list = this.#candidates();
+    const i = list.findIndex((p) => p.name === this.profile.name);
+    this.#setProfile(list[(i + 1) % list.length]);
+  }
+
+  // Profiles tried in auto mode: the standard ones, and the sender config's
+  // experimental profile (not identifiable from the header ID alone).
+  #candidates() {
+    const p = this.config?.profile;
+    return p?.experimental ? [profileFromDescription(p), ...PROFILE_CANDIDATES] : PROFILE_CANDIDATES;
   }
 
   #applyConfig(cfg) {
@@ -285,7 +307,9 @@ export class M1Controller {
     // A file transfer is identified from its headers; the config's profile is only the first guess.
     this.autoProfile = cfg.pattern === 'file';
     if (this.autoProfile) {
-      if (!this.profileConfirmed) this.#setProfile(profileFromDescription(cfg.profile));
+      // Experimental profiles (e.g. colour) cannot be told from the header ID
+      // alone: the config's profile is taken even over a confirmed one.
+      if (!this.profileConfirmed || (cfg.profile.experimental && cfg.profile.name !== this.profile.name)) this.#setProfile(profileFromDescription(cfg.profile));
       this.expected = null;
       this.status = this.quad ? this.#trackingStatus() : this.#searchingStatus();
       this.render();
@@ -568,7 +592,7 @@ export class M1Controller {
     const scale = this.#readScale(cell);
     // Comparison decisions only for static measurements (they cost ~2x).
     const compare = !!this.run;
-    const options = { pattern: this.#pattern(), compare };
+    const options = { pattern: this.#pattern(), compare, interior: this.interiorRefine };
     if (this.gl) {
       try {
         const up = this.gl.upload(this.video);
@@ -707,7 +731,7 @@ export class M1Controller {
     if (roi.w <= 0 || roi.h <= 0) return;
     const jobId = ++this.jobSeq;
     const frameTime = this.frameTime;
-    const job = { quad: this.quad.map((p) => [...p]), profile: describeProfile(this.profile), pattern: this.#pattern(), radius, scale, compare, orient: !this.locked && hasHeader(this.#pattern()), order: [...this.order] };
+    const job = { quad: this.quad.map((p) => [...p]), profile: describeProfile(this.profile), pattern: this.#pattern(), radius, scale, compare, orient: !this.locked && hasHeader(this.#pattern()), order: [...this.order], interior: this.interiorRefine };
     this.pool
       .run(this.video, roi, job)
       .then(({ r, timing }) => {
@@ -881,7 +905,7 @@ export class M1Controller {
         senderRefreshHz: refreshHz,
         dwellMs: (dwell * 1000) / refreshHz,
         guardRefreshes: guard,
-        periodMs: ((dwell + guard) * 1000) / refreshHz,
+        periodMs: (meanPeriodRefreshes({ dwell, guard, stepEvery: rec.config.phaseStepEvery ?? 0 }) * 1000) / refreshHz,
         cameraFrames,
         processedCaptures: s.captures,
         skippedBusy: this.skippedBusy - rec.skippedBusyAtStart,
@@ -988,7 +1012,7 @@ export class M1Controller {
     // Only for the efficiency figure; unknown without a config.
     const schedule = c
       ? {
-          periodMs: (((c.dwellRefreshes ?? c.profile.dwellRefreshes) + (c.guardRefreshes ?? 0)) * 1000) / (c.refreshHz ?? 60),
+          periodMs: (meanPeriodRefreshes({ dwell: c.dwellRefreshes ?? c.profile.dwellRefreshes, guard: c.guardRefreshes ?? 0, stepEvery: c.phaseStepEvery ?? 0 }) * 1000) / (c.refreshHz ?? 60),
           manifestEvery: c.manifestEvery ?? null,
           fecRate: c.fecRate ?? null,
         }
@@ -1054,6 +1078,17 @@ export class M1Controller {
   #recordTransfer(r, totalMs = null) {
     const tr = this.transfer;
     const cls = tr.add(this.frameTime, r, { cellErasures: () => this.#mapErasureCells(r) });
+    // Interior corner refinement: applied / not trusted, and how far it moved the corners.
+    if (r.geometryOk && this.interiorRefine) {
+      const st = (tr.interior ??= { applied: 0, rejected: 0, movedSum: 0, movedMax: 0 });
+      if (r.interior && !r.interior.rejected) {
+        st.applied++;
+        st.movedSum += r.interior.moved;
+        st.movedMax = Math.max(st.movedMax, r.interior.moved);
+      } else {
+        st.rejected++;
+      }
+    }
     // Compact per-capture record: [ms since start, class, failure reason, px/cell, left/right, top/bottom].
     if (tr.records.length < MAX_TRANSFER_RECORDS) {
       const p = r.ok ? perspectiveRatios(r.corners) : null;
@@ -1062,7 +1097,56 @@ export class M1Controller {
       tr.recordsTruncated = true;
     }
     if (totalMs !== null) tr.processingMs.push(totalMs);
-    if (this.transfer === tr) this.status = tr.statusText(this.frameTime) + (r.ppc && r.ppc.min < SMALL_PPC ? '｜もう少し近づけると速くなります' : '');
+    if (cls === 'fec-failed' && this.saveFailedCaptures) this.#saveFailedCapture(tr, r);
+    if (this.transfer === tr) this.status = tr.statusText(this.frameTime) + (r.ppc && r.ppc.min < smallPpc(this.profile) ? '｜もう少し近づけると速くなります' : '');
+  }
+
+  // Saves the current camera frame, which just failed the inner FEC, with the
+  // corners it was read with and its header fields; the true frame is attached
+  // to the log when the trial's object is verified (transfer-run.js). Offline:
+  // tools/transfer-captures.mjs. Runs synchronously up to the canvas draw, so
+  // the image is the frame that was processed (GPU and main-thread paths;
+  // Worker results arrive later, when the video has moved on).
+  #saveFailedCapture(tr, r) {
+    const f = tr.lastFields();
+    const v = this.video;
+    if (!this.gl && this.pool?.usable) return;
+    if (!f || !v.videoWidth || tr.captureBusy || tr.captureSaved >= FAILED_CAPTURES_MAX) return;
+    if (this.frameTime - (tr.lastCaptureT ?? -Infinity) < FAILED_CAPTURE_GAP_MS) return;
+    tr.captureBusy = true;
+    tr.captureSaved = (tr.captureSaved ?? 0) + 1;
+    tr.lastCaptureT = this.frameTime;
+    const c = (tr.captureCanvas ??= document.createElement('canvas'));
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    const entry = {
+      ms: Math.round(this.frameTime - tr.startT),
+      sessionId: f.sessionId,
+      frameType: f.frameType,
+      sourceBlock: f.sourceBlock,
+      sequence: f.sequence,
+      flags: f.flags,
+      corners: r.corners.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]),
+      ppc: r.ppc ? +r.ppc.min.toFixed(2) : null,
+      file: null,
+    };
+    tr.noteCapture(entry);
+    const meta = { kind: 'vdl-transfer-failed-capture', transferStartedAt: tr.startedAt, capturedAt: new Date().toISOString(), video: { width: v.videoWidth, height: v.videoHeight }, profile: describeProfile(this.profile), ...entry };
+    const done = new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'))
+      .then((blob) => fetch('api/captures', { method: 'POST', headers: { 'Content-Type': 'image/png', 'X-VDL-Meta': encodeURIComponent(JSON.stringify(meta)) }, body: blob }))
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+        entry.file = body.file;
+      })
+      .catch((e) => {
+        entry.error = String(e?.message ?? e);
+      })
+      .finally(() => {
+        tr.captureBusy = false;
+      });
+    (tr.captureUploads ??= []).push(done);
   }
 
   async #finishTransfer(outcome) {
@@ -1076,6 +1160,7 @@ export class M1Controller {
     this.status = 'ファイル受信 終了。受信ログをまとめています…';
     this.render();
     await tr.whenAnalyzed();
+    await Promise.allSettled(tr.captureUploads ?? []);
     const s = tr.summary();
     const log = {
       kind: 'vdl-m6-transfer',
@@ -1094,11 +1179,15 @@ export class M1Controller {
       timing: {
         dwellRefreshes: tr.config ? tr.config.dwellRefreshes ?? tr.config.profile.dwellRefreshes : null,
         guardRefreshes: tr.config ? tr.config.guardRefreshes ?? 0 : null,
+        phaseStepEvery: tr.config ? tr.config.phaseStepEvery ?? 0 : null,
         senderRefreshHz: tr.config?.refreshHz ?? null,
         profileIdentifiedFromHeader: this.autoProfile,
         processing: this.processingMode(),
         readScaleMode: this.readScaleMode,
         processingMs: tr.processingMs.toJSON(),
+        interiorRefine: this.interiorRefine
+          ? { enabled: true, applied: tr.interior?.applied ?? 0, rejected: tr.interior?.rejected ?? 0, meanMovedPx: tr.interior?.applied ? +(tr.interior.movedSum / tr.interior.applied).toFixed(2) : null, maxMovedPx: tr.interior ? +tr.interior.movedMax.toFixed(2) : null }
+          : { enabled: false },
       },
       receiver: { demodulation: PILOT_GRID_METHOD, configWarning: tr.warning },
       tracking: trackingJson(this.tracking),
@@ -1107,6 +1196,9 @@ export class M1Controller {
       recordFields: ['ms', 'class', 'reason', 'ppc', 'leftRight', 'topBottom'],
       records: tr.records,
       recordsTruncated: tr.recordsTruncated,
+      // Failed captures saved as images (logs/captures/), with the true frame
+      // (packed symbols) once their trial completed.
+      failedCaptures: tr.captureSamples,
       notes: this.els.notes.value,
     };
     this.lastTransfer = log;
@@ -1147,6 +1239,8 @@ export class M1Controller {
         `${fmt(r.durationMs / 1000)} 秒${r.efficiency ? `（効率 ${fmt(r.efficiency * 100, 0)}%）` : ''}・${kbps(r.goodputBitsPerSecond)}${fecName}・${r.name}（${fmtBytes(r.size)}、${r.segmentCount} 個、外符号 ${outerCodeName(r.outerCode)}）・撮影 ${r.captures} 枚（新しいデータ ${c.segment}・不要だったデータ ${c.redundant ?? 0}・既知 ${c.known}・訂正失敗 ${c['fec-failed']}・CRC 不一致 ${c['crc-failed']}）・複数撮影の合成で救ったフレーム ${r.fec?.combinedRecoveries ?? 0}・隣のフレームの混ざりを除いて救ったフレーム ${r.fec?.mixedRecoveries ?? 0}（混ざりを検出 ${r.fec?.mixedDetected ?? 0}）`,
       ]);
     }
+    const saved = tr ? tr.captureSamples : this.lastTransfer?.failedCaptures;
+    if (saved?.length) out.push(['失敗撮影の画像', `${saved.filter((x) => x.file).length} / ${saved.length} 枚を保存${saved.some((x) => x.error) ? `（失敗: ${saved.find((x) => x.error).error}）` : ''}`]);
     if (!tr && this.transferUpload) out.push(['受信ログ', this.transferUpload]);
     return out;
   }
@@ -1158,7 +1252,7 @@ export class M1Controller {
       const tilt = tiltHint(perspectiveRatios(l.corners));
       // Real runs: below ~8.5 camera px per cell a third of the captures fail
       // the inner FEC (22–36% at 7.3–7.6 vs 2–28% at 9.3–11.5).
-      const small = l.ppc.min < SMALL_PPC ? '。もう少し近づけて、送信画面が映像の幅いっぱいに映るようにすると速くなります' : '';
+      const small = l.ppc.min < smallPpc(this.profile) ? '。もう少し近づけて、送信画面が映像の幅いっぱいに映るようにすると速くなります' : '';
       const base = `追従中（${fmt(l.ppc.min)} px/cell）${l.ok ? '' : '。ぼけ・ぶれで読み取れていません'}${small}`;
       if (this.badOverlap > BAD_OVERLAP_WARN) {
         return `${base}。パターンの ${Math.round(this.badOverlap * 100)}% が写りの悪い範囲（橙色）に掛かっています。上下にずらしてください`;
@@ -1467,7 +1561,9 @@ export class M1Controller {
       c.width = v.videoWidth;
       c.height = v.videoHeight;
       c.getContext('2d').drawImage(v, 0, 0);
-      const blob = await new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'));
+      // Everything describing the frame is taken now, with the image: the PNG
+      // encoding below takes seconds, and corners read afterwards were up to
+      // 200 px off on handheld captures (2026-09-26).
       const meta = {
         kind: 'vdl-raw-capture',
         capturedAt: new Date().toISOString(),
@@ -1484,9 +1580,25 @@ export class M1Controller {
           centers: this.last.centers ?? null,
         },
         camera: { label: this.getCamera()?.label ?? null },
-        senderConfig: this.config && { profile: this.config.profile, pattern: this.config.pattern, sessionId: this.config.sessionId, frame: this.config.frame },
+        // Timing too: for animated patterns without a header, the offline tools
+        // find the frame shown from frame + (capture time - updatedAt) x rate.
+        senderConfig: this.config && {
+          profile: this.config.profile,
+          pattern: this.config.pattern,
+          mode: this.config.mode ?? null,
+          sessionId: this.config.sessionId,
+          frame: this.config.frame,
+          running: this.config.running ?? null,
+          updatedAt: this.config.updatedAt ?? null,
+          dwellRefreshes: this.config.dwellRefreshes ?? null,
+          guardRefreshes: this.config.guardRefreshes ?? null,
+          refreshHz: this.config.refreshHz ?? null,
+          renderLevels: this.config.renderLevels ?? null,
+          palette: this.config.palette ?? null,
+        },
         notes: this.els.notes.value.slice(0, 500),
       };
+      const blob = await new Promise((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'));
       const res = await fetch('api/captures', {
         method: 'POST',
         headers: { 'Content-Type': 'image/png', 'X-VDL-Meta': encodeURIComponent(JSON.stringify(meta)) },
@@ -1502,6 +1614,19 @@ export class M1Controller {
     this.captureCount = (this.captureCount ?? 0) + (this.captureStatus.startsWith('保存済み') ? 1 : 0);
     this.status = `キャプチャ${this.captureStatus}`;
     this.statusHoldUntil = performance.now() + 4000;
+    this.render();
+  }
+
+  // Several captures in a row (e.g. of an animated pattern), `gapMs` apart
+  // after each upload finished.
+  async saveCaptureBurst(count = 8, gapMs = 1000) {
+    if (this.captureBusy || this.burstLeft) return;
+    await this.loadConfig();
+    for (this.burstLeft = count; this.burstLeft > 0; this.burstLeft--) {
+      await this.saveCapture();
+      if (this.burstLeft > 1) await new Promise((r) => setTimeout(r, gapMs));
+    }
+    this.burstLeft = 0;
     this.render();
   }
 

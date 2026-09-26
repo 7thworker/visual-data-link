@@ -77,3 +77,58 @@ export function sampleCells(img, H, gridWidth, gridHeight, k = DEFAULT_KERNEL, o
   }
   return values;
 }
+
+// Mean R, G, B per cell (colour profiles): Float32Array(3 * cells), NaN where
+// the cell falls outside the region. Same lattice as sampleCells.
+export function sampleCellsRgb(img, H, gridWidth, gridHeight, k = DEFAULT_KERNEL) {
+  const n = gridWidth * gridHeight;
+  const out = new Float32Array(3 * n);
+  const offsets = new Float64Array(k);
+  for (let i = 0; i < k; i++) offsets[i] = 0.25 + (0.5 * (i + 0.5)) / k;
+  const cw = gridWidth + 1;
+  const cornersX = new Float64Array(cw * (gridHeight + 1));
+  const cornersY = new Float64Array(cw * (gridHeight + 1));
+  const p = [0, 0];
+  for (let y = 0; y <= gridHeight; y++) {
+    for (let x = 0; x <= gridWidth; x++) {
+      applyHomography(H, x, y, p);
+      cornersX[y * cw + x] = p[0];
+      cornersY[y * cw + x] = p[1];
+    }
+  }
+  const { data, width: iw, height: ih, x0, y0 } = img;
+  for (let y = 0; y < gridHeight; y++) {
+    for (let x = 0; x < gridWidth; x++) {
+      const a = y * cw + x;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let count = 0;
+      for (let u = 0; u < k; u++) {
+        const oy = offsets[u];
+        const lx = cornersX[a] + (cornersX[a + cw] - cornersX[a]) * oy - x0;
+        const ly = cornersY[a] + (cornersY[a + cw] - cornersY[a]) * oy - y0;
+        const ex = cornersX[a + 1] + (cornersX[a + cw + 1] - cornersX[a + 1]) * oy - x0 - lx;
+        const ey = cornersY[a + 1] + (cornersY[a + cw + 1] - cornersY[a + 1]) * oy - y0 - ly;
+        for (let v = 0; v < k; v++) {
+          const fx = lx + ex * offsets[v];
+          const fy = ly + ey * offsets[v];
+          if (fx < 0 || fy < 0) continue;
+          const px = fx | 0;
+          const py = fy | 0;
+          if (px >= iw || py >= ih) continue;
+          const i = (py * iw + px) * 4;
+          r += data[i];
+          g += data[i + 1];
+          b += data[i + 2];
+          count++;
+        }
+      }
+      const o = 3 * (y * gridWidth + x);
+      out[o] = count ? r / count : NaN;
+      out[o + 1] = count ? g / count : NaN;
+      out[o + 2] = count ? b / count : NaN;
+    }
+  }
+  return out;
+}

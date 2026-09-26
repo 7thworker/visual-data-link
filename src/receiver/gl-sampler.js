@@ -6,12 +6,17 @@
 // only the values the chain needs are computed on the GPU and read back:
 //   cells     one mean luma per logical cell (3 x 3 points over the central
 //             50%, SPEC §5.1), mapped through the homography in the shader
+//   cellsRgb  the same lattice, mean R, G, B per cell (colour profiles), 8 bits
+//             per channel, alpha 0 = outside the frame
 //   profiles  luma along each edge normal for corner refinement
 //             (acquisition.js layout: [edge][sample][step])
+//   spread    per interior patch and lattice shift, the mean RGB variance of
+//             the samples inside the patch's cells (interior-refine.js)
 // Values are encoded as integer part (R) and fraction (G) of the luma in an
 // RGBA8 target; B = 255 marks samples outside the frame (NaN).
 
 import { edgeGeometry, profileSteps } from './acquisition.js';
+import { PATCH_W, PATCH_H, MAX_PATCHES, SPREAD_LATTICE, SPREAD_EXTENT } from './interior-refine.js';
 
 const VS = `
 attribute vec2 a_pos;
@@ -58,6 +63,29 @@ void main() {
 }
 `;
 
+const FS_CELLS_RGB = `${COMMON}
+uniform mat3 u_H;
+vec2 mapPoint(vec2 q) {
+  vec3 v = u_H * vec3(q, 1.0);
+  return v.xy / v.z;
+}
+void main() {
+  vec2 cell = floor(gl_FragCoord.xy);
+  vec3 sum = vec3(0.0);
+  float count = 0.0;
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      vec2 o = vec2(0.25 + 0.5 * (float(j) + 0.5) / 3.0, 0.25 + 0.5 * (float(i) + 0.5) / 3.0);
+      vec2 p = mapPoint(cell + o);
+      if (p.x < 0.0 || p.y < 0.0 || p.x > u_size.x || p.y > u_size.y) continue;
+      sum += texture2D(u_tex, p / u_size).rgb;
+      count += 1.0;
+    }
+  }
+  gl_FragColor = count > 0.0 ? vec4(sum / count, 1.0) : vec4(0.0);
+}
+`;
+
 const FS_PROFILES = `${COMMON}
 uniform vec2 u_a0; uniform vec2 u_a1; uniform vec2 u_a2; uniform vec2 u_a3;
 uniform vec2 u_b0; uniform vec2 u_b1; uniform vec2 u_b2; uniform vec2 u_b3;
@@ -78,6 +106,53 @@ void main() {
   float t = u_margin + (1.0 - 2.0 * u_margin) * s / (u_samples - 1.0);
   vec2 p = a + (b - a) * t;
   gl_FragColor = encode(luma(p + n * (u_radius - k * u_step)));
+}
+`;
+
+// One fragment per (shift, patch): x = shift index on a (2r+1)^2 grid (dy
+// outer, dx inner, as interior-refine.js), y = patch. The mean variance is
+// written as sqrt(v) / 2 (fits the 0..255 integer part of the encoding).
+const FS_SPREAD = `${COMMON}
+uniform mat3 u_H;
+uniform float u_r;
+uniform vec2 u_patch[${MAX_PATCHES}];
+vec2 mapPoint(vec2 q) {
+  vec3 v = u_H * vec3(q, 1.0);
+  return v.xy / v.z;
+}
+vec3 rgb(vec2 p) {
+  return texture2D(u_tex, p / u_size).rgb * 255.0;
+}
+void main() {
+  float k = floor(gl_FragCoord.x);
+  float row = floor(gl_FragCoord.y);
+  float side = 2.0 * u_r + 1.0;
+  vec2 shift = vec2(mod(k, side) - u_r, floor(k / side) - u_r);
+  vec2 origin = u_patch[0];
+  for (int i = 1; i < ${MAX_PATCHES}; i++) if (abs(float(i) - row) < 0.5) origin = u_patch[i];
+  float total = 0.0;
+  bool outside = false;
+  for (int cy = 0; cy < ${PATCH_H}; cy++) {
+    for (int cx = 0; cx < ${PATCH_W}; cx++) {
+      vec2 cell = origin + vec2(float(cx), float(cy));
+      vec3 s1 = vec3(0.0);
+      float s2 = 0.0;
+      for (int u = 0; u < ${SPREAD_LATTICE}; u++) {
+        for (int v = 0; v < ${SPREAD_LATTICE}; v++) {
+          vec2 o = vec2(0.5 + ${SPREAD_EXTENT.toFixed(4)} * ((float(v) + 0.5) / ${SPREAD_LATTICE.toFixed(1)} - 0.5), 0.5 + ${SPREAD_EXTENT.toFixed(4)} * ((float(u) + 0.5) / ${SPREAD_LATTICE.toFixed(1)} - 0.5));
+          vec2 p = mapPoint(cell + o) + shift;
+          if (p.x < 0.0 || p.y < 0.0 || p.x > u_size.x || p.y > u_size.y) outside = true;
+          vec3 c = rgb(p);
+          s1 += c;
+          s2 += dot(c, c);
+        }
+      }
+      float m = ${(SPREAD_LATTICE * SPREAD_LATTICE).toFixed(1)};
+      total += s2 / m - dot(s1 / m, s1 / m);
+    }
+  }
+  float mean = max(0.0, total / ${(PATCH_W * PATCH_H).toFixed(1)});
+  gl_FragColor = outside ? vec4(0.0, 0.0, 1.0, 1.0) : encode(min(255.0, 0.5 * sqrt(mean)));
 }
 `;
 
@@ -122,7 +197,9 @@ export class GlSampler {
     if (!gl) throw new Error('WebGL unavailable');
     this.gl = gl;
     this.cellsProg = program(gl, FS_CELLS);
+    this.cellsRgbProg = program(gl, FS_CELLS_RGB);
     this.profProg = program(gl, FS_PROFILES);
+    this.spreadProg = program(gl, FS_SPREAD);
 
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -179,6 +256,23 @@ export class GlSampler {
     return performance.now() - t0;
   }
 
+  // Draws and returns the raw RGBA8 pixels (a view, valid until the next draw).
+  #draw(prog, w, h, setUniforms) {
+    const gl = this.gl;
+    const t = this.#target(w, h);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(prog.p);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.video);
+    gl.uniform1i(prog.loc.u_tex, 0);
+    gl.uniform2f(prog.loc.u_size, this.width, this.height);
+    setUniforms(gl, prog.loc);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, t.pixels);
+    return t.pixels;
+  }
+
   #run(prog, w, h, setUniforms) {
     const t0 = performance.now();
     const gl = this.gl;
@@ -208,6 +302,23 @@ export class GlSampler {
     return this.#run(this.cellsProg, gridWidth, gridHeight, (gl, loc) => gl.uniformMatrix3fv(loc.u_H, false, m));
   }
 
+  cellsRgb(H, gridWidth, gridHeight, k) {
+    if (k !== 3) throw new Error('GPU sampler supports the 3 x 3 kernel only');
+    const t0 = performance.now();
+    const m = new Float32Array([H[0], H[3], H[6], H[1], H[4], H[7], H[2], H[5], H[8]]);
+    const px = this.#draw(this.cellsRgbProg, gridWidth, gridHeight, (gl, loc) => gl.uniformMatrix3fv(loc.u_H, false, m));
+    const n = gridWidth * gridHeight;
+    const out = new Float32Array(3 * n);
+    for (let i = 0, o = 0; i < n; i++, o += 4) {
+      const outside = px[o + 3] === 0;
+      out[3 * i] = outside ? NaN : px[o];
+      out[3 * i + 1] = outside ? NaN : px[o + 1];
+      out[3 * i + 2] = outside ? NaN : px[o + 2];
+    }
+    this.gpuMs += performance.now() - t0;
+    return out;
+  }
+
   profiles(quad, radius) {
     const geo = edgeGeometry(quad, { samplesPerEdge: SAMPLES_PER_EDGE, edgeMargin: EDGE_MARGIN });
     const n = profileSteps(radius, { step: STEP });
@@ -222,6 +333,24 @@ export class GlSampler {
       gl.uniform1f(loc.u_margin, EDGE_MARGIN);
       gl.uniform1f(loc.u_samples, SAMPLES_PER_EDGE);
     });
+  }
+
+  // offsets: the (2r+1)^2 shift grid of interior-refine.js (dy outer, dx inner).
+  spread(H, patches, offsets) {
+    const r = (Math.sqrt(offsets.length) - 1) / 2;
+    if (!Number.isInteger(r) || offsets[0][0] !== -r || offsets[0][1] !== -r) throw new Error('spread: offsets must be a square shift grid');
+    if (patches.length > MAX_PATCHES) throw new Error('spread: too many patches');
+    const m = new Float32Array([H[0], H[3], H[6], H[1], H[4], H[7], H[2], H[5], H[8]]);
+    const origins = new Float32Array(2 * MAX_PATCHES);
+    patches.forEach((pa, i) => origins.set([pa.x0, pa.y0], 2 * i));
+    const v = this.#run(this.spreadProg, offsets.length, patches.length, (gl, loc) => {
+      gl.uniformMatrix3fv(loc.u_H, false, m);
+      gl.uniform1f(loc.u_r, r);
+      gl.uniform2fv(loc['u_patch[0]'], origins);
+    });
+    const out = new Float64Array(v.length);
+    for (let i = 0; i < v.length; i++) out[i] = (2 * v[i]) ** 2;
+    return out;
   }
 
   destroy() {

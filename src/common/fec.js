@@ -11,6 +11,64 @@
 
 import { bitsPerSymbol } from './profiles.js';
 import { rsEncode, rsDecode } from './rs.js';
+import { bitsToSymbol, symbolToBits } from './gray.js';
+
+// Payload cells <-> bits. Power-of-two levels: log2 L Gray-mapped bits per
+// cell. 27 colours: 19 bits in each group of 4 cells as base-27 digits
+// (27^4 = 531441 >= 2^19; 4.75 bits per cell, 99.9% of log2 27); cells left
+// over after the last whole group carry nothing.
+export function symbolGrouping(profile) {
+  if (profile.levels === 27) return { cells: 4, bits: 19 };
+  return { cells: 1, bits: bitsPerSymbol(profile.levels) };
+}
+
+export function payloadBitCapacity(profile, payloadCells) {
+  const g = symbolGrouping(profile);
+  return Math.floor(payloadCells / g.cells) * g.bits;
+}
+
+// Frame bytes -> symbols of `count` payload cells.
+export function bytesToPayloadSymbols(bytes, profile, count) {
+  const g = symbolGrouping(profile);
+  if (g.cells === 1) return Uint8Array.from(bytesToSymbolBits(bytes, g.bits, count), bitsToSymbol);
+  const out = new Uint8Array(count);
+  const groups = Math.floor(count / g.cells);
+  const values = bytesToSymbolBits(bytes, g.bits, groups);
+  for (let k = 0; k < groups; k++) {
+    let v = values[k];
+    for (let d = g.cells - 1; d >= 0; d--) {
+      out[k * g.cells + d] = v % 27;
+      v = Math.floor(v / 27);
+    }
+  }
+  return out;
+}
+
+// Symbols of the payload cells -> frame bytes (a group whose digits exceed
+// 19 bits, i.e. a misread, gives all ones; the inner FEC corrects it).
+export function payloadSymbolsToBytes(symbols, profile, byteCount) {
+  const g = symbolGrouping(profile);
+  if (g.cells === 1) return symbolBitsToBytes(Uint8Array.from(symbols, symbolToBits), g.bits, byteCount);
+  const groups = Math.floor(symbols.length / g.cells);
+  const values = new Uint32Array(groups);
+  const max = 2 ** g.bits - 1;
+  for (let k = 0; k < groups; k++) {
+    let v = 0;
+    for (let d = 0; d < g.cells; d++) v = v * 27 + symbols[k * g.cells + d];
+    values[k] = Math.min(max, v);
+  }
+  return symbolBitsToBytes(values, g.bits, byteCount);
+}
+
+// Per-byte erasure flags from per-payload-cell flags.
+export function payloadFlagsToByteFlags(flags, profile, byteCount) {
+  const g = symbolGrouping(profile);
+  if (g.cells === 1) return symbolFlagsToByteFlags(flags, g.bits, byteCount);
+  const groups = Math.floor(flags.length / g.cells);
+  const gf = new Uint8Array(groups);
+  for (let k = 0; k < groups; k++) for (let d = 0; d < g.cells; d++) if (flags[k * g.cells + d]) gf[k] = 1;
+  return symbolFlagsToByteFlags(gf, g.bits, byteCount);
+}
 
 // Parity per 255 bytes: 32 ~ RS(255,223), 64 ~ RS(255,191), 96 ~ RS(255,159).
 export const FEC_RATES = Object.freeze([
@@ -37,7 +95,7 @@ export function fecLayout(profile, payloadCells, rateIndex) {
   const key = `${profile.levels}:${payloadCells}:${rateIndex}`;
   if (cache.has(key)) return cache.get(key);
   const bps = bitsPerSymbol(profile.levels);
-  const bytes = Math.floor((payloadCells * bps) / 8);
+  const bytes = Math.floor(payloadBitCapacity(profile, payloadCells) / 8);
   const codewords = Math.ceil(bytes / 255);
   const n = Math.floor(bytes / codewords);
   const nsym = Math.max(2, 2 * Math.round((n * rate.parityPer255) / 255 / 2));
@@ -109,7 +167,8 @@ export function decodeFecBytes(layout, bytes, erased = null) {
 
 // Byte stream <-> symbol stream (bits MSB first, bps bits per symbol).
 export function bytesToSymbolBits(bytes, bps, count) {
-  const out = new Uint8Array(count);
+  // Groups of more than 8 bits (27 colours: 19) need wider values.
+  const out = bps > 8 ? new Uint32Array(count) : new Uint8Array(count);
   let bit = 0;
   for (let c = 0; c < count; c++) {
     let v = 0;

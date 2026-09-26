@@ -23,9 +23,7 @@
 // (session already complete or being verified).
 
 import { FRAME_TYPE } from '../common/protocol.js';
-import { fecRateFromFlags, knownFecFlags, decodeFecBytes, symbolBitsToBytes, symbolFlagsToByteFlags } from '../common/fec.js';
-import { bitsPerSymbol } from '../common/profiles.js';
-import { symbolToBits } from '../common/gray.js';
+import { fecRateFromFlags, knownFecFlags, decodeFecBytes, payloadSymbolsToBytes, payloadFlagsToByteFlags } from '../common/fec.js';
 import { payloadMask, pilotLayoutFor } from '../common/test-frame.js';
 import {
   DEFAULT_MAX_OBJECT_BYTES,
@@ -42,7 +40,8 @@ import {
   buildObjectFrame,
 } from '../common/object-frame.js';
 import { BlockDecoder, partitionBlocks, coefficients, encodeSymbol } from '../common/rlnc.js';
-import { fitMixing, cancelPartner, levelShape } from './mixing.js';
+import { fitMixing, cancelPartner, levelShape, fitMixingRgb, cancelPartnerRgb } from './mixing.js';
+import { symbolFromBits } from './colour-demod.js';
 import { readHeaders, isGuard, ERASURE_CONFIDENCE } from './reception.js';
 
 // DATA frames buffered before their session's manifest (SPEC §12), all sessions.
@@ -124,6 +123,31 @@ export function pilotBlockVariance(profile, pilots, coord, shift) {
   return Float64Array.from(sum, (s, b) => (s + PILOT_VARIANCE_PRIOR * g) / (n[b] + PILOT_VARIANCE_PRIOR));
 }
 
+// The same for colour soft values (colour-demod.js): per block, the mean
+// squared distance of the pilot bit coordinates from their symbol bits,
+// averaged over the three channels.
+export function pilotBlockVarianceRgb(profile, pilots, bits, shift) {
+  const L = profile.levels;
+  const blockOf = pilotBlocks(profile, pilots);
+  const sum = new Float64Array(COMBINE_BLOCKS);
+  const n = new Uint32Array(COMBINE_BLOCKS);
+  let total = 0;
+  let count = 0;
+  for (let k = 0; k < pilots.count; k++) {
+    const i = pilots.cells[k];
+    if (Number.isNaN(bits[3 * i])) continue;
+    const s = (pilots.levels[k] + shift) % L;
+    const d = ((bits[3 * i] - (s & 4 ? 1 : 0)) ** 2 + (bits[3 * i + 1] - (s & 2 ? 1 : 0)) ** 2 + (bits[3 * i + 2] - (s & 1 ? 1 : 0)) ** 2) / 3;
+    sum[blockOf[k]] += d;
+    n[blockOf[k]]++;
+    total += d;
+    count++;
+  }
+  if (!count) return null;
+  const g = total / count;
+  return Float64Array.from(sum, (s, b) => (s + PILOT_VARIANCE_PRIOR * g) / (n[b] + PILOT_VARIANCE_PRIOR));
+}
+
 const pilotBlockCache = new WeakMap();
 function pilotBlocks(profile, pilots) {
   let b = pilotBlockCache.get(pilots);
@@ -155,7 +179,6 @@ export class ObjectReceiver {
     this.digest = digest;
     this.onComplete = onComplete;
     this.onHashMismatch = onHashMismatch;
-    this.bps = bitsPerSymbol(profile.levels);
     const mask = payloadMask(profile, 'file');
     const index = [];
     for (let i = 0; i < mask.length; i++) if (mask[i]) index.push(i);
@@ -172,6 +195,7 @@ export class ObjectReceiver {
     // (outer code 1, blocks not yet complete), regenerated partner frames,
     // captures waiting for their partner.
     this.qShape = null;
+    this.colourGains = null; // clean channel contrasts (colour profiles, mixing.js)
     this.recentBodies = new Map();
     this.partnerCache = new Map();
     this.mixedQueue = [];
@@ -228,19 +252,20 @@ export class ObjectReceiver {
     return 'rejected';
   }
 
-  // Payload-order Gray bit groups -> de-whitened, FEC-decoded, CRC-checked
-  // body. erasureFlags(): per-payload-cell erasure flags, computed only if the
-  // errors-only decoding fails.
+  // Payload-order symbols -> de-whitened, FEC-decoded, CRC-checked body
+  // (fec.js maps symbols to bits: Gray bits, or base-27 groups for 27
+  // colours). erasureFlags(): per-payload-cell erasure flags, computed only if
+  // the errors-only decoding fails.
   #decodeGroups(fields, groups, erasureFlags) {
     const layout = objectFrameLayout(this.profile, fecRateFromFlags(fields.flags));
-    const bytes = whiten(symbolBitsToBytes(groups, this.bps, layout.bytes), fields);
+    const bytes = whiten(payloadSymbolsToBytes(groups, this.profile, layout.bytes), fields);
     this.fec.decodes++;
     let d = decodeFecBytes(layout, bytes, null);
     if (!d.ok) {
       const flags = erasureFlags();
       if (flags.some((v) => v)) {
         this.fec.withErasures++;
-        d = decodeFecBytes(layout, bytes, symbolFlagsToByteFlags(flags, this.bps, layout.bytes));
+        d = decodeFecBytes(layout, bytes, payloadFlagsToByteFlags(flags, this.profile, layout.bytes));
       }
     }
     if (!d.ok) return { ok: false, cls: 'fec-failed' };
@@ -263,7 +288,7 @@ export class ObjectReceiver {
   // One capture on its own.
   #decode(result, fields, cellErasures) {
     const groups = new Uint8Array(this.payloadIndex.length);
-    for (let c = 0; c < groups.length; c++) groups[c] = symbolToBits(result.symbols[this.payloadIndex[c]]);
+    for (let c = 0; c < groups.length; c++) groups[c] = result.symbols[this.payloadIndex[c]];
     const conf = result.confidence;
     return this.#decodeGroups(fields, groups, () => this.#erasures((c) => (conf ? conf[this.payloadIndex[c]] : 1), cellErasures));
   }
@@ -315,6 +340,7 @@ export class ObjectReceiver {
   #combine(key, result, fields, cellErasures) {
     const soft = result.soft;
     if (!soft) return null;
+    if (soft.bits) return this.#combineRgb(key, soft.bits, fields, cellErasures);
     const { coord } = soft;
     const variance = pilotBlockVariance(this.profile, this.pilots, coord, objectPilotShift(fields, this.profile.levels));
     if (!variance) return null;
@@ -342,8 +368,51 @@ export class ObjectReceiver {
       if (!e.weight[c]) continue; // conf 0: erased
       const u = e.sum[c] / e.weight[c];
       const s = Math.max(0, Math.min(top, Math.round(u)));
-      groups[c] = symbolToBits(s);
+      groups[c] = s;
       conf[c] = Math.max(0, Math.min(1, 1 - 2 * Math.abs(u - s)));
+    }
+    this.fec.combineAttempts++;
+    const d = this.#decodeGroups(fields, groups, () => this.#erasures((c) => conf[c], cellErasures));
+    if (d.ok) {
+      this.fec.combinedRecoveries++;
+      this.fec.combinedCaptures += e.captures;
+      this.combining.delete(key);
+    }
+    return d;
+  }
+
+  // Colour profiles: the same, with the three soft bit coordinates per cell
+  // (colour-demod.js) averaged separately and thresholded at 0.5.
+  #combineRgb(key, bits, fields, cellErasures) {
+    const variance = pilotBlockVarianceRgb(this.profile, this.pilots, bits, objectPilotShift(fields, this.profile.levels));
+    if (!variance) return null;
+    const N = this.payloadIndex.length;
+    let e = this.combining.get(key);
+    if (!e) {
+      e = { sum: new Float32Array(3 * N), weight: new Float32Array(N), captures: 0 };
+      if (this.combining.size >= MAX_COMBINING) this.combining.delete(this.combining.keys().next().value);
+      this.combining.set(key, e);
+    }
+    const blockWeight = Float64Array.from(variance, combineWeight);
+    for (let c = 0; c < N; c++) {
+      const i = this.payloadIndex[c];
+      if (Number.isNaN(bits[3 * i])) continue;
+      const w = blockWeight[this.blockOf[c]];
+      e.sum[3 * c] += w * bits[3 * i];
+      e.sum[3 * c + 1] += w * bits[3 * i + 1];
+      e.sum[3 * c + 2] += w * bits[3 * i + 2];
+      e.weight[c] += w;
+    }
+    e.captures++;
+    if (e.captures < 2) return null;
+    const groups = new Uint8Array(N);
+    const conf = new Float32Array(N);
+    for (let c = 0; c < N; c++) {
+      const w = e.weight[c];
+      if (!w) continue; // conf 0: erased
+      const { s, conf: q } = symbolFromBits(e.sum[3 * c] / w, e.sum[3 * c + 1] / w, e.sum[3 * c + 2] / w);
+      groups[c] = s;
+      conf[c] = q;
     }
     this.fec.combineAttempts++;
     const d = this.#decodeGroups(fields, groups, () => this.#erasures((c) => conf[c], cellErasures));
@@ -364,6 +433,8 @@ export class ObjectReceiver {
       // Clean captures teach the camera-side level shape (mixing.js).
       const q = levelShape(result.pilot?.global);
       if (q) this.qShape = this.qShape ? this.qShape.map((v, l) => 0.8 * v + 0.2 * q[l]) : q;
+      const g = result.channelGains;
+      if (g && g.every((v) => v > 10)) this.colourGains = this.colourGains ? this.colourGains.map((v, c) => 0.8 * v + 0.2 * g[c]) : [...g];
       return d;
     }
     if (keep) this.#keepFailed(key, result, fields, t, headerCopies);
@@ -382,7 +453,7 @@ export class ObjectReceiver {
     let medianSpacing = null;
     let misfit = null;
     let pilotVariance = null;
-    if (result.soft) {
+    if (result.soft?.coord) {
       coord = new Uint8Array(N); // (u + 0.5) * 50, 255 = not read
       spacing = new Uint8Array(N); // luma, rounded
       for (let c = 0; c < N; c++) {
@@ -446,11 +517,14 @@ export class ObjectReceiver {
   }
 
   #classifyCapture(t, result, cellErasures) {
+    this.lastFields = null;
     if (!result.ok || !result.symbols) return 'acquisition-failed';
     const h = readHeaders(result.symbols, this.profile, result.values ?? null);
     if (h.transition) return this.#transition(t, result, h, cellErasures);
     if (!h.fields) return isGuard(result) ? 'guard' : 'no-header';
     const f = h.fields;
+    // Header fields of the last capture that had a valid header (diagnostics).
+    this.lastFields = f;
     if (f.frameType !== FRAME_TYPE.DATA && f.frameType !== FRAME_TYPE.MANIFEST) return 'other-type';
     if (!knownFecFlags(f.flags)) return this.#reject('fec-rate');
     if (!fecRateFromFlags(f.flags)) return this.#reject('no-fec');
@@ -556,13 +630,17 @@ export class ObjectReceiver {
   // pilots, object-frame.js objectPilotShift; then both are tried). Returns
   // the decode result, or null (not mixed, or a partner unknown -> queued).
   #unmix(s, n, partners, result, t, cellErasures, copies, queue = true) {
-    const q = this.qShape;
-    if (!q || !result.values) return null;
+    // Colour profiles: per-channel model on the cell colours (mixing.js).
+    const colour = !!this.profile.palette;
+    const q = colour ? this.colourGains : this.qShape;
+    if (!q || !(colour ? result.rgb : result.values)) return null;
     const L = this.profile.levels;
     const sN = objectPilotShift(n, L);
     const fits = [];
     for (const p of partners) {
-      const fit = fitMixing(result.values, this.profile, this.pilots, sN, objectPilotShift(p, L), q);
+      const fit = colour
+        ? fitMixingRgb(result.rgb, this.profile, this.pilots, sN, objectPilotShift(p, L), q)
+        : fitMixing(result.values, this.profile, this.pilots, sN, objectPilotShift(p, L), q);
       if (fit && fit.share >= MIXED_MIN_SHARE) fits.push({ fit, p });
     }
     if (!fits.length) return null;
@@ -578,7 +656,7 @@ export class ObjectReceiver {
         continue;
       }
       this.fec.mixedAttempts++;
-      const pseudo = cancelPartner(result.values, this.profile, fit, partner, q, this.payloadIndex);
+      const pseudo = colour ? cancelPartnerRgb(result.rgb, this.profile, fit, partner, q, this.payloadIndex) : cancelPartner(result.values, this.profile, fit, partner, q, this.payloadIndex);
       // Decoded on its own: the capture itself is already in the combination.
       d = this.#decode(pseudo, n, cellErasures);
       if (d.ok) {
@@ -593,7 +671,9 @@ export class ObjectReceiver {
 
   #queueMixed(s, n, partners, result, t, cellErasures, copies) {
     if (this.mixedQueue.length >= MAX_MIXED_QUEUE) this.mixedQueue.shift();
-    this.mixedQueue.push({ sessionId: s.sessionId, n, partners, result: { values: Float32Array.from(result.values) }, t, cellErasures, copies });
+    const kept = { values: Float32Array.from(result.values) };
+    if (result.rgb) kept.rgb = Float32Array.from(result.rgb);
+    this.mixedQueue.push({ sessionId: s.sessionId, n, partners, result: kept, t, cellErasures, copies });
     this.fec.mixedQueued++;
   }
 

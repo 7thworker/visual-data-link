@@ -19,7 +19,7 @@ import { pilotLayout, shiftedPilotLayout } from './pilots.js';
 import { headerLayout } from './frame-layout.js';
 import { encodeHeader, headerToBits } from './header.js';
 import { FRAME_TYPE } from './protocol.js';
-import { fecLayout, fecFlags, encodeFecBytes, bytesToSymbolBits } from './fec.js';
+import { fecLayout, fecFlags, encodeFecBytes, bytesToPayloadSymbols } from './fec.js';
 
 export const PATTERNS = Object.freeze({
   prbs: 'PRBS test frame',
@@ -90,11 +90,25 @@ export function fillOutline(out, profile) {
 // assigned to interior cells in row-major order.
 function fillPrbs(out, profile, sessionId, sequence) {
   const prbs = createPrbs(PRBS_DOMAIN.TEST_PAYLOAD, sessionId, sequence);
-  const bps = bitsPerSymbol(profile.levels);
+  const { levels } = profile;
+  const bps = bitsPerSymbol(levels);
+  // Levels that are not a power of two (27 colours): uniform symbols by
+  // rejection from ceil(log2 L) bits, no Gray mapping.
+  const whole = Number.isInteger(bps);
+  const draw = Math.ceil(bps);
   const { x0, y0, width, height } = testFrameInterior(profile);
   for (let y = y0; y < y0 + height; y++) {
     const row = y * profile.gridWidth;
-    for (let x = x0; x < x0 + width; x++) out[row + x] = bitsToSymbol(prbs.nextBits(bps));
+    for (let x = x0; x < x0 + width; x++) {
+      if (whole) {
+        out[row + x] = bitsToSymbol(prbs.nextBits(bps));
+        continue;
+      }
+      let s;
+      do s = prbs.nextBits(draw);
+      while (s >= levels);
+      out[row + x] = s;
+    }
   }
 }
 
@@ -141,9 +155,9 @@ export function writeHeaderAndPilots(out, profile, header, pilotShift = 0) {
 // Frame bytes (fec.js layout.bytes) -> payload cells, bits MSB first.
 export function writePayloadBytes(out, profile, bytes) {
   const payload = payloadMask(profile, 'dynamic');
-  const groups = bytesToSymbolBits(bytes, bitsPerSymbol(profile.levels), dynamicPayloadCells(profile));
+  const symbols = bytesToPayloadSymbols(bytes, profile, dynamicPayloadCells(profile));
   let c = 0;
-  for (let i = 0; i < payload.length; i++) if (payload[i]) out[i] = bitsToSymbol(groups[c++]);
+  for (let i = 0; i < payload.length; i++) if (payload[i]) out[i] = symbols[c++];
 }
 
 // Header, pilots, and the payload: raw PRBS symbols, or with `fec` (rate

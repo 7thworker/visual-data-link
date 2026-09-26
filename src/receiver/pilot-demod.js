@@ -153,11 +153,12 @@ export function estimateLevelGrid(values, profile, layout, sigmaTiles = PILOT_GR
 // soft (optional { coord, spacing }, Float32Arrays): per cell, the continuous
 // level coordinate (levelCoord) and the local mean spacing between adjacent
 // level centers in luma, for combining several captures of the same frame.
-export function classifyGrid(values, profile, grid, symbols, confidence, soft = null) {
-  const coord = soft?.coord;
-  const spacing = soft?.spacing;
-  const { gridWidth: w, gridHeight: h, levels } = profile;
-  const { tilesX: tx, tilesY: ty, cx, cy, smooth } = grid;
+// Bilinear interpolation index of the tile lattice per column and row:
+// { colI, colF, rowJ, rowF } (tile index of the left / upper neighbour and
+// the weight of the right / lower one).
+export function gridInterpolation(profile, grid) {
+  const { gridWidth: w, gridHeight: h } = profile;
+  const { tilesX: tx, tilesY: ty, cx, cy } = grid;
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
   const colI = new Int32Array(w);
   const colF = new Float64Array(w);
@@ -177,6 +178,15 @@ export function classifyGrid(values, profile, grid, symbols, confidence, soft = 
     rowJ[y] = j;
     rowF[y] = clamp01((yc - cy[j * tx]) / (cy[(j + 1) * tx] - cy[j * tx]));
   }
+  return { colI, colF, rowJ, rowF };
+}
+
+export function classifyGrid(values, profile, grid, symbols, confidence, soft = null) {
+  const coord = soft?.coord;
+  const spacing = soft?.spacing;
+  const { gridWidth: w, gridHeight: h, levels } = profile;
+  const { tilesX: tx, smooth } = grid;
+  const { colI, colF, rowJ, rowF } = gridInterpolation(profile, grid);
   const centers = new Float64Array(levels);
   for (let y = 0; y < h; y++) {
     const j = rowJ[y];
