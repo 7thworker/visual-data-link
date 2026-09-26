@@ -269,3 +269,8 @@ button.big, a.button-link.big { font-size: 1.15rem; padding: 0.7rem 1.2rem; }
 /* English next to the Japanese text (public pages). */
 .en { display: block; color: var(--muted); font-size: 0.9em; font-weight: normal; margin-top: 0.15rem; }
 h1 .en, h2 .en, h3 .en { font-size: 0.75em; }
+/* Language switch (src/app/i18n.js): one language at a time. */
+html[data-lang="ja"] .en { display: none; }
+html[data-lang="en"] .ja { display: none; }
+html[data-lang="en"] .en { display: inline; color: inherit; font-size: inherit; font-weight: inherit; margin: 0; }
+.lang-toggle { margin-left: auto; padding: 0.2rem 0.6rem; font-size: 0.85rem; }

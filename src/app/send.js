@@ -8,6 +8,9 @@ import { PROFILES, RENDER_LEVELS } from '../common/profiles.js';
 import { paletteFor, writeSymbolsRgbPalette } from '../common/color.js';
 import { encodeQr, drawQr } from '../common/qr.js';
 import { receivePageUrl } from './receive-url.js';
+import { initLang, setBilingual } from './i18n.js';
+
+initLang();
 import { prepareTransfer, buildCarouselFrame, DEFAULT_MAX_OBJECT_BYTES, OUTER_CODE_RLNC } from '../common/object-frame.js';
 import { linearMeanGray } from '../common/luminance.js';
 import { WakeLock } from '../common/wake-lock.js';
@@ -89,18 +92,15 @@ function prepareDrawing(mode) {
 
 const fmtBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(2)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${n} B`);
 
-// Japanese text with the English under it (textContent only: file names are user data).
-function setText(el, ja, en) {
-  const span = document.createElement('span');
-  span.className = 'en';
-  span.lang = 'en';
-  span.textContent = en;
-  el.replaceChildren(ja, span);
-}
+// Japanese and English, shown by the language switch (i18n.js; textContent
+// only: file names are user data).
+const setText = setBilingual;
 
-function showError(message) {
-  els.error.textContent = message ?? '';
-  els.error.hidden = !message;
+// en: the English (else the message is shown as it is in both languages).
+function showError(ja, en = null) {
+  if (en) setBilingual(els.error, ja, en);
+  else els.error.textContent = ja ?? '';
+  els.error.hidden = !ja;
 }
 
 // Refresh counts closest to the target durations (SPEC §10.1), e.g. 3 + 0
@@ -115,7 +115,7 @@ function timing(mode) {
 async function loadFile(file) {
   showError(null);
   if (file.size > DEFAULT_MAX_OBJECT_BYTES) {
-    showError(`ファイルが大きすぎます（${fmtBytes(file.size)}）。${fmtBytes(DEFAULT_MAX_OBJECT_BYTES)} までです / The file is too large (${fmtBytes(file.size)}); the limit is ${fmtBytes(DEFAULT_MAX_OBJECT_BYTES)}`);
+    showError(`ファイルが大きすぎます（${fmtBytes(file.size)}）。${fmtBytes(DEFAULT_MAX_OBJECT_BYTES)} までです`, `The file is too large (${fmtBytes(file.size)}); the limit is ${fmtBytes(DEFAULT_MAX_OBJECT_BYTES)}`);
     return;
   }
   setText(els.fileInfo, '読み込み中…', 'Loading…');
@@ -126,7 +126,7 @@ async function loadFile(file) {
   } catch (e) {
     state.file = null;
     els.fileInfo.textContent = '';
-    showError(`ファイルを読めませんでした / Could not read the file: ${e.message}`);
+    showError(`ファイルを読めませんでした: ${e.message}`, `Could not read the file: ${e.message}`);
     return;
   }
   showFileInfo();
@@ -138,7 +138,7 @@ function showFileInfo() {
   const mib = state.file.bytes.length / 1048576;
   const [lo, hi] = state.mode.secondsPerMiB.map((s) => Math.max(3, Math.round(s * mib)));
   const secs = lo === hi ? `${lo}` : `${lo}〜${hi}`;
-  setText(els.fileInfo, `${state.file.name}（${fmtBytes(state.file.bytes.length)}）受け取りの目安: ${lo === hi ? '約 ' : ''}${secs} 秒`, `Estimated reception time: ${lo === hi ? 'about ' : ''}${secs.replace('〜', '–')} s`);
+  setText(els.fileInfo, `${state.file.name}（${fmtBytes(state.file.bytes.length)}）受け取りの目安: ${lo === hi ? '約 ' : ''}${secs} 秒`, `${state.file.name} (${fmtBytes(state.file.bytes.length)}) — estimated reception time: ${lo === hi ? 'about ' : ''}${secs.replace('〜', '–')} s`);
 }
 
 // The chosen mode is kept for the next visit.
@@ -249,7 +249,7 @@ async function toggleFullscreen() {
     if (isFullscreen()) await (document.exitFullscreen?.() ?? document.webkitExitFullscreen?.());
     else await (els.stage.requestFullscreen?.({ navigationUI: 'hide' }) ?? els.stage.webkitRequestFullscreen?.());
   } catch (e) {
-    showError(`全画面にできませんでした / Could not enter full screen: ${e.message}`);
+    showError(`全画面にできませんでした: ${e.message}`, `Could not enter full screen: ${e.message}`);
   }
 }
 
@@ -289,7 +289,7 @@ async function start() {
   els.setup.hidden = true;
   els.sending.hidden = false;
   document.body.classList.add('transmitting');
-  setText(els.sendInfo, `送信中: ${f.name}（${fmtBytes(f.bytes.length)}）— スマホで受け取りが終わったら「停止」`, 'Sending — press "Stop" once the phone has received the file');
+  setText(els.sendInfo, `送信中: ${f.name}（${fmtBytes(f.bytes.length)}）— スマホで受け取りが終わったら「停止」`, `Sending: ${f.name} (${fmtBytes(f.bytes.length)}) — press "Stop" once the phone has received the file`);
   await wakeLock.acquire();
 }
 

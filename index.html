@@ -7,7 +7,10 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="app index">
-  <h1>Visual Data Link <small>v0.1</small></h1>
+  <header class="app-header">
+    <h1>Visual Data Link <small>v0.1</small></h1>
+    <button id="lang-toggle" type="button" class="lang-toggle">English</button>
+  </header>
   <p>画面に表示した模様をスマホのカメラで撮影して、ファイルを送ります。ネットワークは使わず、ブラウザだけで動きます。<span class="en" lang="en">Send a file from a PC screen to a phone camera: the file is shown as a pattern and captured by the camera. It runs in the browser only and uses no network for the transfer.</span></p>
 
   <div class="top-choices">
@@ -36,7 +39,7 @@
     </ul>
     <h3>使う前に知っておいてほしいこと<span class="en" lang="en">Before you use it</span></h3>
     <ul>
-      <li><strong>画面が見える人は誰でも受け取れます。</strong>模様は暗号化していないので、周りから撮影されると内容を取り出されるおそれがあります。人に見られて困るファイルは送らないでください。<span class="en" lang="en"><strong>Anyone who can see the screen can receive the file.</strong> The patterns are not encrypted, so someone filming the screen could recover the content. Do not send files that others must not see.</span></li>
+      <li><strong>受け取るスマホは決まっていません。</strong>送信中の画面にカメラを向ければ、どのスマホでも受け取れます。模様は暗号化していないので、周りの人に撮影されると内容を取り出されるおそれがあります。人に見られて困るファイルは送らないでください。<span class="en" lang="en"><strong>The receiving phone is not fixed.</strong> Any phone pointed at the sending screen can receive the file. The patterns are not encrypted, so someone filming the screen could recover the content. Do not send files that others must not see.</span></li>
       <li>受け取ったファイルは、送信側で計算したハッシュ値（SHA-256）と一致したときだけ保存できます。途中で誤りがあっても、壊れたファイルが保存されることはありません。受け取ったファイルが自動で開くこともありません。<span class="en" lang="en">A received file can be saved only when it matches the sender's hash (SHA-256), so a corrupted file is never saved. Received files are never opened automatically.</span></li>
       <li>送信中は画面の模様が毎秒 20 回ほど切り替わります。光の点滅で気分が悪くなったことがある方は使わないでください。見るときは、送信画面の横幅の 2 倍以上離れてください。<span class="en" lang="en">While sending, the pattern changes about 20 times per second. Do not use it if flashing light has ever made you unwell. Watch from at least twice the width of the sending pattern away.</span></li>
       <li>速さの目安は 1 MiB あたり 12〜25 秒（送り方「標準」、スマホによって変わります）で、64 MiB まで送れます。受信を始めるのが途中からでも、途中で画面から外れても、続きから集まります。<span class="en" lang="en">It takes about 12–25 seconds per MiB (mode "Standard", depending on the phone), for files up to 64 MiB. Reception can start at any time and continues where it left off if the phone looks away.</span></li>
@@ -66,6 +69,9 @@
     import { encodeQr, drawQr } from './src/common/qr.js';
     import { hasDevServer } from './src/common/dev-server.js';
     import { receivePageUrl as receiveUrl } from './src/app/receive-url.js';
+    import { initLang } from './src/app/i18n.js';
+
+    initLang();
 
     // The measurement pages need the development server (sender config, log upload).
     hasDevServer().then(async (dev) => {

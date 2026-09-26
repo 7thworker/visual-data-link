@@ -13,6 +13,9 @@ import { PreviewOverlay } from '../receiver/overlay.js';
 import { M1Controller } from '../receiver/m1.js';
 import { fmtBytes } from '../receiver/transfer-run.js';
 import { frameAction } from './receive-logic.js';
+import { initLang, setBilingual } from './i18n.js';
+
+initLang();
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -197,8 +200,8 @@ function showResult(obj) {
   state.downloadUrl = URL.createObjectURL(new Blob([obj.data], { type: 'application/octet-stream' }));
   els.save.href = state.downloadUrl;
   els.save.download = obj.name;
-  els.save.textContent = `保存 / Save: ${obj.name}（${fmtBytes(obj.size)}）`;
-  setText(els.resultInfo, `内容を確認済み（SHA-256 ${obj.sha256.slice(0, 16)}…）`, 'Content verified (SHA-256 match)');
+  setBilingual(els.save, `保存: ${obj.name}（${fmtBytes(obj.size)}）`, `Save: ${obj.name} (${fmtBytes(obj.size)})`);
+  setText(els.resultInfo, `内容を確認済み（SHA-256 ${obj.sha256.slice(0, 16)}…）`, `Content verified (SHA-256 ${obj.sha256.slice(0, 16)}…)`);
 }
 
 // Japanese text with the English under it; unchanged texts are left alone
@@ -212,11 +215,8 @@ ${en}`;
     el.textContent = ja;
     return;
   }
-  const span = document.createElement('span');
-  span.className = 'en';
-  span.lang = 'en';
-  span.textContent = en;
-  el.replaceChildren(ja, span);
+  // Shown by the language switch (i18n.js).
+  setBilingual(el, ja, en);
 }
 
 function scheduleUi() {

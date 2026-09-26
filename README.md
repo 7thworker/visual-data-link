@@ -24,7 +24,7 @@ PC の画面に表示した模様をスマホのカメラで撮影して、フ�
 
 ## 使う前に知っておいてほしいこと
 
-- **画面が見える人は誰でも受け取れます。** 模様は暗号化していないので、周りから撮影されると内容を取り出されるおそれがあります。人に見られて困るファイルは送らないでください。
+- **受け取るスマホは決まっていません。** 送信中の画面にカメラを向ければ、どのスマホでも受け取れます。模様は暗号化していないので、周りの人に撮影されると内容を取り出されるおそれがあります。人に見られて困るファイルは送らないでください。
 - 受け取ったファイルは、送信側で計算したハッシュ値（SHA-256）と一致したときだけ保存できます。壊れたファイルが保存されることはありません。受け取ったファイルが自動で開くこともありません。
 - 送信中は画面の模様が毎秒 20 回ほど切り替わります。光の点滅で気分が悪くなったことがある方は使わないでください。見るときは、送信画面の横幅の 2 倍以上離れてください。点滅の基準（WCAG 2.3.1）にはシミュレーションで確認しただけで、専門の解析ツールによる評価は受けていません。
 
@@ -69,7 +69,7 @@ It takes about 12–25 seconds per MiB in mode "Standard", 9–17 s in "Fast" an
 
 ## Before you use it
 
-- **Anyone who can see the screen can receive the file.** The patterns are not encrypted, so someone filming the screen could recover the content. Do not send files that others must not see.
+- **The receiving phone is not fixed.** Any phone pointed at the sending screen can receive the file. The patterns are not encrypted, so someone filming the screen could recover the content. Do not send files that others must not see.
 - A received file can be saved only when it matches the sender's hash (SHA-256), so a corrupted file is never saved. Received files are never opened automatically.
 - While sending, the pattern changes about 20 times per second. Do not use it if flashing light has ever made you unwell, and watch from at least twice the width of the sending pattern away. The flashing was checked against WCAG 2.3.1 by simulation only, not with a certified analysis tool.
 
