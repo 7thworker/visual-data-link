@@ -8,46 +8,46 @@
 </head>
 <body class="app index">
   <h1>Visual Data Link <small>v0.1</small></h1>
-  <p>画面に表示した模様をスマホのカメラで撮影して、ファイルを送ります。ネットワークは使わず、ブラウザだけで動きます。</p>
+  <p>画面に表示した模様をスマホのカメラで撮影して、ファイルを送ります。ネットワークは使わず、ブラウザだけで動きます。<span class="en" lang="en">Send a file from a PC screen to a phone camera: the file is shown as a pattern and captured by the camera. It runs in the browser only and uses no network for the transfer.</span></p>
 
   <div class="top-choices">
     <section class="top-choice">
-      <h2>送る（PC）</h2>
-      <p>このページを開いている PC から送ります。</p>
-      <p><a href="send.html" class="button-link big">ファイルを送る</a></p>
+      <h2>送る（PC）<span class="en" lang="en">Send (PC)</span></h2>
+      <p>このページを開いている PC から送ります。<span class="en" lang="en">Send from the PC showing this page.</span></p>
+      <p><a href="send.html" class="button-link big">ファイルを送る / Send a file</a></p>
     </section>
     <section class="top-choice">
-      <h2>受け取る（スマホ）</h2>
-      <p>スマホのカメラでこの QR コードを読み取って開いてください。</p>
+      <h2>受け取る（スマホ）<span class="en" lang="en">Receive (phone)</span></h2>
+      <p>スマホのカメラでこの QR コードを読み取って開いてください。<span class="en" lang="en">Scan this QR code with the phone's camera to open the receive page.</span></p>
       <canvas id="qr" class="qr" hidden></canvas>
       <p id="qr-url" class="hint qr-url"></p>
-      <p><a id="receive-link" href="receive.html">このブラウザで受信ページを開く</a></p>
+      <p><a id="receive-link" href="receive.html">このブラウザで受信ページを開く / Open the receive page here</a></p>
     </section>
   </div>
 
   <section class="about">
-    <h2>このサイトについて</h2>
-    <h3>ファイルはサーバに送られません</h3>
+    <h2>このサイトについて<span class="en" lang="en">About this site</span></h2>
+    <h3>ファイルはサーバに送られません<span class="en" lang="en">Your file never goes to a server</span></h3>
     <ul>
-      <li>ファイルは、PC の画面に表示した模様をスマホのカメラで撮影して受け渡します。ファイルの中身がインターネットやサーバを通ることはありません。</li>
-      <li>このサイトのサーバは、ページ（HTML と JavaScript）を配信するだけです。ファイルの読み込み、画面の模様への変換、撮影した映像からの復元は、すべてお使いの端末のブラウザの中で行います。</li>
-      <li>アカウント登録は不要です。このサイトが利用状況や診断情報を送信することはありません（受信ページの「診断情報を保存」は、端末に保存するだけです）。ページの配信元（GitHub Pages）には、一般的な Web サイトと同じく、ページを開いたときのアクセスの記録が残ることがあります。</li>
-      <li class="dev-note" hidden><strong>今は開発用サーバで開いています。</strong>この場合に限り、受信の診断ログ（ファイルの中身は含みません）を開発用サーバに送ります。「撮影画像を送る」を押したときは、カメラの画像も送ります。</li>
+      <li>ファイルは、PC の画面に表示した模様をスマホのカメラで撮影して受け渡します。ファイルの中身がインターネットやサーバを通ることはありません。<span class="en" lang="en">The file is passed as a pattern on the PC screen that the phone's camera captures. Its content never travels over the internet or through a server.</span></li>
+      <li>このサイトのサーバは、ページ（HTML と JavaScript）を配信するだけです。ファイルの読み込み、画面の模様への変換、撮影した映像からの復元は、すべてお使いの端末のブラウザの中で行います。<span class="en" lang="en">The server only delivers the pages (HTML and JavaScript). Reading the file, turning it into screen patterns and rebuilding it from the camera images all happen in the browsers on your devices.</span></li>
+      <li>アカウント登録は不要です。このサイトが利用状況や診断情報を送信することはありません（受信ページの「診断情報を保存」は、端末に保存するだけです）。ページの配信元（GitHub Pages）には、一般的な Web サイトと同じく、ページを開いたときのアクセスの記録が残ることがあります。<span class="en" lang="en">No account is needed. This site sends no usage or diagnostic data ("Save diagnostics" on the receive page only saves a file on your device). As with any website, the host (GitHub Pages) may keep access logs of page visits.</span></li>
+      <li class="dev-note" hidden><strong>今は開発用サーバで開いています。</strong>この場合に限り、受信の診断ログ（ファイルの中身は含みません）を開発用サーバに送ります。「撮影画像を送る」を押したときは、カメラの画像も送ります。<span class="en" lang="en"><strong>This page is served by the development server.</strong> Only then, reception diagnostics (without the file content) are sent to it, and a camera image when "Send a capture" is pressed.</span></li>
     </ul>
-    <h3>使う前に知っておいてほしいこと</h3>
+    <h3>使う前に知っておいてほしいこと<span class="en" lang="en">Before you use it</span></h3>
     <ul>
-      <li><strong>画面が見える人は誰でも受け取れます。</strong>模様は暗号化していないので、周りから撮影されると内容を取り出されるおそれがあります。人に見られて困るファイルは送らないでください。</li>
-      <li>受け取ったファイルは、送信側で計算したハッシュ値（SHA-256）と一致したときだけ保存できます。途中で誤りがあっても、壊れたファイルが保存されることはありません。受け取ったファイルが自動で開くこともありません。</li>
-      <li>送信中は画面の模様が毎秒 20 回ほど切り替わります。光の点滅で気分が悪くなったことがある方は使わないでください。見るときは、送信画面の横幅以上離れてください。</li>
-      <li>速さの目安は 1 MiB あたり 25〜30 秒で、64 MiB まで送れます。受信を始めるのが途中からでも、途中で画面から外れても、続きから集まります。</li>
+      <li><strong>画面が見える人は誰でも受け取れます。</strong>模様は暗号化していないので、周りから撮影されると内容を取り出されるおそれがあります。人に見られて困るファイルは送らないでください。<span class="en" lang="en"><strong>Anyone who can see the screen can receive the file.</strong> The patterns are not encrypted, so someone filming the screen could recover the content. Do not send files that others must not see.</span></li>
+      <li>受け取ったファイルは、送信側で計算したハッシュ値（SHA-256）と一致したときだけ保存できます。途中で誤りがあっても、壊れたファイルが保存されることはありません。受け取ったファイルが自動で開くこともありません。<span class="en" lang="en">A received file can be saved only when it matches the sender's hash (SHA-256), so a corrupted file is never saved. Received files are never opened automatically.</span></li>
+      <li>送信中は画面の模様が毎秒 20 回ほど切り替わります。光の点滅で気分が悪くなったことがある方は使わないでください。見るときは、送信画面の横幅以上離れてください。<span class="en" lang="en">While sending, the pattern changes about 20 times per second. Do not use it if flashing light has ever made you unwell. Watch from at least the width of the sending pattern away.</span></li>
+      <li>速さの目安は 1 MiB あたり 25〜30 秒で、64 MiB まで送れます。受信を始めるのが途中からでも、途中で画面から外れても、続きから集まります。<span class="en" lang="en">It takes about 25–30 seconds per MiB, for files up to 64 MiB. Reception can start at any time and continues where it left off if the phone looks away.</span></li>
     </ul>
-    <h3>動作を確認した環境</h3>
+    <h3>動作を確認した環境<span class="en" lang="en">Tested with</span></h3>
     <ul>
-      <li>送る側: Windows の PC と Chrome</li>
-      <li>受け取る側: iPhone（iOS 18）の Safari</li>
-      <li>ほかの端末でも動くことがありますが、確認していません。近くの物にピントが合わないカメラ（一部のタブレットなど）や、処理の遅い端末では受け取れないことがあります。</li>
+      <li>送る側: Windows の PC と Chrome<span class="en" lang="en">Sending: Chrome on a Windows PC</span></li>
+      <li>受け取る側: iPhone（iOS 18）の Safari<span class="en" lang="en">Receiving: Safari on iPhone (iOS 18)</span></li>
+      <li>ほかの端末でも動くことがありますが、確認していません。近くの物にピントが合わないカメラ（一部のタブレットなど）や、処理の遅い端末では受け取れないことがあります。<span class="en" lang="en">Other devices may work but are untested. Cameras that cannot focus up close (some tablets) and slow devices may fail to receive.</span></li>
     </ul>
-    <p class="hint">Visual Data Link は、ブラウザだけで画面からカメラへデータを送る実験的なソフトウェアです。動作や結果は保証しません。</p>
+    <p class="hint">Visual Data Link は、ブラウザだけで画面からカメラへデータを送る実験的なソフトウェアです。動作や結果は保証しません。<span class="en" lang="en">Visual Data Link is experimental software for screen-to-camera data transfer in the browser. It comes with no warranty.</span></p>
   </section>
 
   <details id="experiments" hidden>
@@ -84,7 +84,7 @@
     const canvas = document.getElementById('qr');
     receiveUrl().then((url) => {
       if (!url) {
-        qrUrl.textContent = 'スマホから開ける HTTPS のアドレスが見つかりません。ngrok を起動してから、このページを再読み込みしてください。';
+        qrUrl.textContent = 'スマホから開ける HTTPS のアドレスが見つかりません。ngrok を起動してから、このページを再読み込みしてください。 / No HTTPS address for the phone was found: start ngrok and reload this page.';
         return;
       }
       drawQr(canvas, encodeQr(url, { ecl: 'M' }), 6);

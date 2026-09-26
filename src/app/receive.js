@@ -197,8 +197,26 @@ function showResult(obj) {
   state.downloadUrl = URL.createObjectURL(new Blob([obj.data], { type: 'application/octet-stream' }));
   els.save.href = state.downloadUrl;
   els.save.download = obj.name;
-  els.save.textContent = `保存: ${obj.name}（${fmtBytes(obj.size)}）`;
-  els.resultInfo.textContent = `内容を確認済み（SHA-256 ${obj.sha256.slice(0, 16)}…）`;
+  els.save.textContent = `保存 / Save: ${obj.name}（${fmtBytes(obj.size)}）`;
+  setText(els.resultInfo, `内容を確認済み（SHA-256 ${obj.sha256.slice(0, 16)}…）`, 'Content verified (SHA-256 match)');
+}
+
+// Japanese text with the English under it; unchanged texts are left alone
+// (this runs for every camera frame).
+function setText(el, ja, en = '') {
+  const key = `${ja}
+${en}`;
+  if (el.dataset.text === key) return;
+  el.dataset.text = key;
+  if (!en) {
+    el.textContent = ja;
+    return;
+  }
+  const span = document.createElement('span');
+  span.className = 'en';
+  span.lang = 'en';
+  span.textContent = en;
+  el.replaceChildren(ja, span);
 }
 
 function scheduleUi() {
@@ -214,24 +232,24 @@ function renderUi() {
   const p = m1.transferProgress();
   const receiving = !!m1.transfer;
   let message;
-  let detail = '';
+  let detail = [''];
   if (state.done) {
-    message = 'ファイルを受け取りました。';
+    message = ['ファイルを受け取りました。', 'The file has been received.'];
   } else if (state.stopped) {
-    message = '中止しました。「カメラを起動」でやり直せます。';
+    message = ['中止しました。「カメラを起動」でやり直せます。', 'Cancelled. Tap "Start camera" to try again.'];
   } else if (!state.cam) {
-    message = '「カメラを起動」を押して、送信画面にスマホを向けてください。';
+    message = ['「カメラを起動」を押して、送信画面にスマホを向けてください。', 'Tap "Start camera" and point the phone at the sending screen.'];
   } else if (receiving) {
-    message = '受信中です。送信画面に向けたままにしてください。';
-    if (m1.statusText().includes(CLOSER_HINT)) detail = `${CLOSER_HINT}（送信画面が映像の幅いっぱいになるくらいまで）`;
+    message = ['受信中です。送信画面に向けたままにしてください。', 'Receiving. Keep the phone pointed at the sending screen.'];
+    if (m1.statusText().includes(CLOSER_HINT)) detail = [`${CLOSER_HINT}（送信画面が映像の幅いっぱいになるくらいまで）`, 'Move closer to go faster (until the sending screen fills the width of the view).'];
   } else if (m1.quad && m1.locked) {
-    message = '送信画面を見つけました。読み取りを始めています…';
+    message = ['送信画面を見つけました。読み取りを始めています…', 'Sending screen found. Starting to read…'];
   } else {
-    message = '送信画面を探しています。白い枠がすべて映るように向けてください。';
-    detail = m1.statusText();
+    message = ['送信画面を探しています。白い枠がすべて映るように向けてください。', 'Looking for the sending screen. Keep its whole white frame in view.'];
+    detail = [m1.statusText()];
   }
-  els.message.textContent = message;
-  els.detail.textContent = detail;
+  setText(els.message, ...message);
+  setText(els.detail, ...detail);
   const showProgress = receiving || state.done;
   els.progress.hidden = !showProgress || !p;
   if (showProgress && p) {

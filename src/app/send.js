@@ -34,7 +34,6 @@ const els = {
   stage: $('stage'),
   canvas: $('screen'),
   warning: $('warning'),
-  warningRate: $('warning-rate'),
   warningOk: $('warning-ok'),
   warningCancel: $('warning-cancel'),
 };
@@ -59,6 +58,15 @@ const imageData = new ImageData(PROFILE.gridWidth, PROFILE.gridHeight);
 
 const fmtBytes = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(2)} MiB` : n >= 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${n} B`);
 
+// Japanese text with the English under it (textContent only: file names are user data).
+function setText(el, ja, en) {
+  const span = document.createElement('span');
+  span.className = 'en';
+  span.lang = 'en';
+  span.textContent = en;
+  el.replaceChildren(ja, span);
+}
+
 function showError(message) {
   els.error.textContent = message ?? '';
   els.error.hidden = !message;
@@ -75,10 +83,10 @@ function timing() {
 async function loadFile(file) {
   showError(null);
   if (file.size > DEFAULT_MAX_OBJECT_BYTES) {
-    showError(`ファイルが大きすぎます（${fmtBytes(file.size)}）。${fmtBytes(DEFAULT_MAX_OBJECT_BYTES)} までです`);
+    showError(`ファイルが大きすぎます（${fmtBytes(file.size)}）。${fmtBytes(DEFAULT_MAX_OBJECT_BYTES)} までです / The file is too large (${fmtBytes(file.size)}); the limit is ${fmtBytes(DEFAULT_MAX_OBJECT_BYTES)}`);
     return;
   }
-  els.fileInfo.textContent = '読み込み中…';
+  setText(els.fileInfo, '読み込み中…', 'Loading…');
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const sha256 = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
@@ -86,12 +94,13 @@ async function loadFile(file) {
   } catch (e) {
     state.file = null;
     els.fileInfo.textContent = '';
-    showError(`ファイルを読めませんでした: ${e.message}`);
+    showError(`ファイルを読めませんでした / Could not read the file: ${e.message}`);
     return;
   }
   const mib = state.file.bytes.length / 1048576;
   const [lo, hi] = SECONDS_PER_MIB.map((s) => Math.max(3, Math.round(s * mib)));
-  els.fileInfo.textContent = `${state.file.name}（${fmtBytes(state.file.bytes.length)}）受け取りの目安: ${lo === hi ? `約 ${lo}` : `${lo}〜${hi}`} 秒`;
+  const secs = lo === hi ? `${lo}` : `${lo}〜${hi}`;
+  setText(els.fileInfo, `${state.file.name}（${fmtBytes(state.file.bytes.length)}）受け取りの目安: ${lo === hi ? '約 ' : ''}${secs} 秒`, `Estimated reception time: ${lo === hi ? 'about ' : ''}${secs.replace('〜', '–')} s`);
   els.start.disabled = false;
 }
 
@@ -155,7 +164,7 @@ function onTick(vsync) {
 // ---------------------------------------------------------------- run control
 
 function confirmWarning(hz) {
-  els.warningRate.textContent = hz.toFixed(0);
+  for (const el of document.querySelectorAll('.warning-rate')) el.textContent = hz.toFixed(0);
   els.warning.hidden = false;
   els.warningOk.focus();
   return new Promise((resolve) => {
@@ -179,7 +188,7 @@ async function toggleFullscreen() {
     if (isFullscreen()) await (document.exitFullscreen?.() ?? document.webkitExitFullscreen?.());
     else await (els.stage.requestFullscreen?.({ navigationUI: 'hide' }) ?? els.stage.webkitRequestFullscreen?.());
   } catch (e) {
-    showError(`全画面にできませんでした: ${e.message}`);
+    showError(`全画面にできませんでした / Could not enter full screen: ${e.message}`);
   }
 }
 
@@ -217,7 +226,7 @@ async function start() {
   els.setup.hidden = true;
   els.sending.hidden = false;
   document.body.classList.add('transmitting');
-  els.sendInfo.textContent = `送信中: ${f.name}（${fmtBytes(f.bytes.length)}）— スマホで受け取りが終わったら「停止」`;
+  setText(els.sendInfo, `送信中: ${f.name}（${fmtBytes(f.bytes.length)}）— スマホで受け取りが終わったら「停止」`, 'Sending — press "Stop" once the phone has received the file');
   await wakeLock.acquire();
 }
 

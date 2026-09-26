@@ -1,5 +1,7 @@
 # Visual Data Link
 
+[English](#visual-data-link-english)
+
 PC の画面に表示した模様をスマホのカメラで撮影して、ファイルを受け渡す Web アプリです。ブラウザだけで動き、ファイルの中身はネットワークを通りません。
 
 このリポジトリは、GitHub Pages で公開しているページのファイルです。
@@ -40,3 +42,48 @@ PC の画面に表示した模様をスマホのカメラで撮影して、フ�
 ## ライセンス
 
 MIT License（[LICENSE](LICENSE)）
+
+---
+
+# Visual Data Link (English)
+
+A web app that sends a file from a PC screen to a phone camera: the file is shown on the screen as a pattern, and the phone captures it. It runs in the browser only; the file content never travels over the network.
+
+This repository holds the files of the pages published on GitHub Pages.
+
+## How to use
+
+1. On the PC, open the top page of this site and press "Send a file".
+2. Scan the QR code on the top page with the phone's camera to open the receive page.
+3. On the PC, choose a file and press "Start sending" (a photosensitivity warning is shown first).
+4. On the phone, tap "Start camera" and point it so that the whole white frame of the sending screen is visible. Reception starts by itself when the frame turns green.
+5. When it is done, tap "Save" on the phone, and press "Stop" on the PC.
+
+It takes about 25–30 seconds per MiB, for files up to 64 MiB. Reception can start at any time and continues where it left off if the phone looks away.
+
+## Your file never goes to a server
+
+- The file is passed as patterns on the screen that the camera captures. Its content never travels over the internet or through a server.
+- The server (GitHub Pages) only delivers the pages (HTML and JavaScript). Reading the file, turning it into patterns and rebuilding it from the camera images all happen in the browsers on your devices.
+- No account is needed. This site sends no usage or diagnostic data. As with any website, GitHub Pages may keep access logs of page visits.
+
+## Before you use it
+
+- **Anyone who can see the screen can receive the file.** The patterns are not encrypted, so someone filming the screen could recover the content. Do not send files that others must not see.
+- A received file can be saved only when it matches the sender's hash (SHA-256), so a corrupted file is never saved. Received files are never opened automatically.
+- While sending, the pattern changes about 20 times per second. Do not use it if flashing light has ever made you unwell, and watch from at least the width of the sending pattern away. The flashing was checked against WCAG 2.3.1 by simulation only, not with a certified analysis tool.
+
+## Tested with
+
+- Sending: Chrome on a Windows PC
+- Receiving: Safari on iPhone (iOS 18)
+
+Other devices may work but are untested. Cameras that cannot focus up close (some tablets) and slow devices may fail to receive.
+
+## Notice
+
+Experimental software, provided without warranty.
+
+## License
+
+MIT License ([LICENSE](LICENSE))

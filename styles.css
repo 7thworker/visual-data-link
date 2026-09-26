@@ -234,3 +234,6 @@ button.big, a.button-link.big { font-size: 1.15rem; padding: 0.7rem 1.2rem; }
 .about { margin: 1.5rem 0; }
 .about h3 { font-size: 1rem; margin: 1rem 0 0.3rem; }
 .about li { margin: 0.3rem 0; line-height: 1.5; }
+/* English next to the Japanese text (public pages). */
+.en { display: block; color: var(--muted); font-size: 0.9em; font-weight: normal; margin-top: 0.15rem; }
+h1 .en, h2 .en, h3 .en { font-size: 0.75em; }

@@ -3,37 +3,37 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>VDL — 受け取る</title>
+  <title>VDL — 受け取る / Receive</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="app receive">
   <header class="app-header">
-    <h1>ファイルを受け取る</h1>
+    <h1>ファイルを受け取る<span class="en" lang="en">Receive a file</span></h1>
     <a href="index.html" class="hint">VDL</a>
   </header>
 
   <p id="error" class="error" hidden></p>
 
   <section class="app-status">
-    <p id="message" class="app-message">「カメラを起動」を押して、送信画面にスマホを向けてください。</p>
+    <p id="message" class="app-message">「カメラを起動」を押して、送信画面にスマホを向けてください。<span class="en" lang="en">Tap "Start camera" and point the phone at the sending screen.</span></p>
     <div id="progress" class="progress waiting" hidden>
       <div class="progress-text"><span id="progress-label"></span><strong id="progress-percent">0%</strong></div>
       <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
     </div>
     <p id="detail" class="hint"></p>
   </section>
-  <p class="hint">カメラの映像と受け取ったファイルは、この端末の中だけで処理します。<span class="dev-note" hidden>（開発用サーバで開いているため、診断ログを開発用サーバに送ります。ファイルの中身は送りません）</span></p>
+  <p class="hint">カメラの映像と受け取ったファイルは、この端末の中だけで処理します。<span class="dev-note" hidden>（開発用サーバで開いているため、診断ログを開発用サーバに送ります。ファイルの中身は送りません）</span><span class="en" lang="en">Camera images and the received file are processed on this device only.<span class="dev-note" hidden> (Served by the development server: diagnostics without the file content are sent to it.)</span></span></p>
 
   <div class="buttons app-buttons">
-    <button id="start" type="button" class="primary big">カメラを起動</button>
-    <button id="stop" type="button" hidden>中止</button>
+    <button id="start" type="button" class="primary big">カメラを起動 / Start camera</button>
+    <button id="stop" type="button" hidden>中止 / Cancel</button>
   </div>
 
   <section id="result" class="app-result" hidden>
     <p><a id="save" class="button-link big"></a></p>
     <p id="result-info" class="hint"></p>
     <div class="buttons">
-      <button id="again" type="button" class="primary">もう一度受け取る</button>
+      <button id="again" type="button" class="primary">もう一度受け取る / Receive another</button>
     </div>
   </section>
 
@@ -43,18 +43,18 @@
   </div>
 
   <details class="app-help">
-    <summary>うまくいかないとき</summary>
+    <summary>うまくいかないとき / Troubleshooting</summary>
     <ul>
-      <li>送信画面の白い枠がすべて映るようにしてください。枠が緑になると受信が始まります。</li>
-      <li>送信画面が映像の幅いっぱいになるくらいまで近づけると速くなります（「もう少し近づけると速くなります」と出たら近づけてください）。縦持ち・横持ち・多少斜めでも受信できます。</li>
-      <li>途中で画面から外れても、戻せば続きから集まります。</li>
-      <li>受け取ったファイルは自動では開きません。「保存」を押して保存してください。</li>
-      <li>近くの物にピントが合わないカメラ（一部のタブレットなど）や、処理の遅い端末では受信できないことがあります。動作を確認した端末は iPhone（iOS 18 の Safari）です。</li>
+      <li>送信画面の白い枠がすべて映るようにしてください。枠が緑になると受信が始まります。<span class="en" lang="en">Keep the whole white frame of the sending screen in view. Reception starts when the frame turns green.</span></li>
+      <li>送信画面が映像の幅いっぱいになるくらいまで近づけると速くなります（「もう少し近づけると速くなります」と出たら近づけてください）。縦持ち・横持ち・多少斜めでも受信できます。<span class="en" lang="en">It is faster when the sending screen fills the width of the camera view (move closer when told so). Upright, sideways or slightly slanted all work.</span></li>
+      <li>途中で画面から外れても、戻せば続きから集まります。<span class="en" lang="en">If the phone looks away, reception continues where it left off when it points back.</span></li>
+      <li>受け取ったファイルは自動では開きません。「保存」を押して保存してください。<span class="en" lang="en">The received file is never opened automatically: tap "Save" to keep it.</span></li>
+      <li>近くの物にピントが合わないカメラ（一部のタブレットなど）や、処理の遅い端末では受信できないことがあります。動作を確認した端末は iPhone（iOS 18 の Safari）です。<span class="en" lang="en">Cameras that cannot focus up close (some tablets) and slow devices may fail. Tested with Safari on iPhone (iOS 18).</span></li>
     </ul>
-    <label class="check" id="upload-logs-row" hidden><input type="checkbox" id="upload-logs" autocomplete="off" checked> 診断ログを開発用サーバに送る（ファイルの中身は送りません）</label>
-    <h2>診断情報</h2>
+    <label class="check" id="upload-logs-row" hidden><input type="checkbox" id="upload-logs" autocomplete="off" checked> 診断ログを開発用サーバに送る（ファイルの中身は送りません）/ Send diagnostics to the development server (no file content)</label>
+    <h2>診断情報 / Diagnostics</h2>
     <dl id="diag" class="stats"></dl>
-    <div class="buttons"><button id="save-diag" type="button">診断情報を保存</button> <button id="send-diag" type="button" hidden>診断ログを送る</button> <button id="send-capture" type="button" hidden>撮影画像を送る</button> <span id="diag-status" class="hint"></span></div>
+    <div class="buttons"><button id="save-diag" type="button">診断情報を保存 / Save diagnostics</button> <button id="send-diag" type="button" hidden>診断ログを送る / Send diagnostics</button> <button id="send-capture" type="button" hidden>撮影画像を送る / Send a capture</button> <span id="diag-status" class="hint"></span></div>
   </details>
 
   <script type="module" src="src/app/receive.js"></script>
