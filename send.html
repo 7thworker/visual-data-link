@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VDL — 送る</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="app send">
+  <section id="setup" class="app-setup">
+    <header class="app-header">
+      <h1>ファイルを送る</h1>
+      <a href="index.html" class="hint">VDL</a>
+    </header>
+
+    <p id="error" class="error" hidden></p>
+
+    <label id="drop" class="drop">
+      <input id="file" type="file">
+      <span id="drop-text">ここにファイルをドロップするか、クリックして選んでください（64 MiB まで）</span>
+    </label>
+    <p id="file-info" class="app-message"></p>
+    <p class="hint">選んだファイルはこの PC の外へは送られません。画面に模様として表示するだけです。画面が見える人は誰でも受け取れるので、人に見られて困るファイルは送らないでください。</p>
+
+    <div class="form app-options">
+      <label>表示の大きさ
+        <select id="size" autocomplete="off">
+          <option value="6" selected>小さめ（スマホを縦持ちで近づけやすい、おすすめ）</option>
+          <option value="8">中くらい</option>
+          <option value="0">画面いっぱい</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="buttons">
+      <button id="start" type="button" class="primary big" disabled>送信開始</button>
+    </div>
+
+    <details class="app-help">
+      <summary>受け取り方</summary>
+      <ol>
+        <li>スマホで受信ページを開きます（トップページの QR コードから開けます）。</li>
+        <li>「カメラを起動」を押し、この画面の白い枠がすべて映るように向けます。枠が緑になると受信が始まります。</li>
+        <li>受け取りが終わったら、スマホで「保存」を押します。送信側は「停止」を押してください。</li>
+      </ol>
+      <p class="hint">目安: 1 MiB あたり 25〜30 秒。受信側がいつ始めても、途中で画面から外れても受け取れます。</p>
+    </details>
+  </section>
+
+  <section id="sending" class="app-sending" hidden>
+    <div class="send-bar">
+      <span id="send-info"></span>
+      <span class="buttons">
+        <button id="fullscreen" type="button">全画面</button>
+        <button id="stop" type="button" class="primary">停止</button>
+      </span>
+    </div>
+    <main id="stage" class="stage">
+      <canvas id="screen"></canvas>
+    </main>
+  </section>
+
+  <div id="warning" class="overlay" hidden>
+    <div class="dialog" role="alertdialog" aria-labelledby="warning-title" aria-describedby="warning-body">
+      <h2 id="warning-title">光過敏性に関する注意</h2>
+      <div id="warning-body">
+        <p>送信中は、画面の模様が毎秒 <strong id="warning-rate">20</strong> 回程度切り替わります。</p>
+        <p>光の点滅や模様で発作・気分不良を起こしたことがある方は使用しないでください。また周囲の人にも画面を注視しないよう伝えてください。気分が悪くなった場合はすぐに Esc キーで停止してください。</p>
+        <p><strong>画面から、送信画面の横幅以上離れて見てください。</strong>近くから見ると細かい模様の明るさの揺れが大きくなります。</p>
+        <p>WCAG 2.3.1 の点滅の基準に対してはシミュレーションで確認しただけで、専門の解析ツールによる評価は受けていません。</p>
+      </div>
+      <div class="buttons">
+        <button id="warning-ok" type="button" class="primary">理解して開始</button>
+        <button id="warning-cancel" type="button">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="src/app/send.js"></script>
+</body>
+</html>
